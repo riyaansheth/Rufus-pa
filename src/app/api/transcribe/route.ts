@@ -29,9 +29,19 @@ export async function POST(req: NextRequest) {
   try {
     const openai = new OpenAI({ apiKey });
     const model = process.env.OPENAI_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe";
-    const file = new File([audio], "recording.webm", {
-      type: audio.type || "audio/webm",
-    });
+    // Match the filename extension to the actual mime type so OpenAI accepts it
+    // (Safari sends audio/mp4, Chrome/Firefox audio/webm).
+    const mime = audio.type || "audio/webm";
+    const ext = mime.includes("mp4")
+      ? "mp4"
+      : mime.includes("ogg")
+        ? "ogg"
+        : mime.includes("mpeg")
+          ? "mp3"
+          : mime.includes("wav")
+            ? "wav"
+            : "webm";
+    const file = new File([audio], `recording.${ext}`, { type: mime });
     const result = await openai.audio.transcriptions.create({
       file,
       model,

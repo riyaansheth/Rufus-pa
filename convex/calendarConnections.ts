@@ -38,8 +38,22 @@ export const status = query({
  * TODO(production): decrypt tokens here once encryption-at-rest is implemented.
  */
 export const getConnectionInternal = internalQuery({
-  args: { workspaceId: v.id("workspaces") },
-  handler: async (ctx, { workspaceId }) => {
+  args: {
+    workspaceId: v.id("workspaces"),
+    userId: v.optional(v.string()),
+  },
+  handler: async (ctx, { workspaceId, userId }) => {
+    // Prefer the acting user's own connection (each member connects their own
+    // Google account); fall back to any workspace connection.
+    if (userId) {
+      const own = await ctx.db
+        .query("calendarConnections")
+        .withIndex("by_workspace_user", (q) =>
+          q.eq("workspaceId", workspaceId).eq("userId", userId),
+        )
+        .first();
+      if (own) return own;
+    }
     return ctx.db
       .query("calendarConnections")
       .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
@@ -180,9 +194,9 @@ export const disconnect = mutation({
     await writeAuditLog(ctx, {
       workspaceId,
       actorUserId: identity.clerkUserId,
-      action: "integration.failed",
+      action: "integration.disconnected",
       entityType: "calendarConnection",
-      metadata: { provider, disconnected: true },
+      metadata: { provider },
     });
   },
 });

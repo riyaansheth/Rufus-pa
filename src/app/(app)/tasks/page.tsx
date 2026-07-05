@@ -36,9 +36,19 @@ export default function TasksPage() {
 function Tasks({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   const [open, setOpen] = React.useState(false);
   const tasks = useQuery(api.tasks.list, { workspaceId });
-  const update = useMutation(api.tasks.update);
+  const updateFn = useMutation(api.tasks.update);
   const remove = useMutation(api.tasks.remove);
   const { toast } = useToast();
+
+  // Wrap so inline status changes surface errors instead of failing silently.
+  const update = (args: Parameters<typeof updateFn>[0]) =>
+    updateFn(args).catch((err) =>
+      toast({
+        title: "Could not update task",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      }),
+    );
 
   return (
     <div>

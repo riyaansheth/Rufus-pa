@@ -72,15 +72,30 @@ export const list = query({
   },
 });
 
-/** Tasks due today (used by the dashboard + assistant `listTodaySchedule`). */
+/**
+ * Tasks due today. "Today" is timezone-sensitive, so callers pass the day window
+ * (dayStartMs/dayEndMs) computed in the USER's timezone. The dashboard derives these
+ * from the browser's local clock; the assistant derives them from the user's tz.
+ * Falls back to the server day (UTC) only if a window isn't supplied.
+ */
 export const listDueToday = query({
-  args: { workspaceId: v.id("workspaces") },
-  handler: async (ctx, { workspaceId }) => {
+  args: {
+    workspaceId: v.id("workspaces"),
+    dayStartMs: v.optional(v.number()),
+    dayEndMs: v.optional(v.number()),
+  },
+  handler: async (ctx, { workspaceId, dayStartMs, dayEndMs }) => {
     await requireWorkspaceAccess(ctx, workspaceId);
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
+    let start = dayStartMs;
+    let end = dayEndMs;
+    if (start === undefined || end === undefined) {
+      const s = new Date();
+      s.setHours(0, 0, 0, 0);
+      const e = new Date();
+      e.setHours(23, 59, 59, 999);
+      start = s.getTime();
+      end = e.getTime();
+    }
     const all = await ctx.db
       .query("tasks")
       .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
@@ -90,8 +105,8 @@ export const listDueToday = query({
         t.status !== "done" &&
         t.status !== "cancelled" &&
         t.dueAt !== undefined &&
-        t.dueAt >= start.getTime() &&
-        t.dueAt <= end.getTime(),
+        t.dueAt >= start! &&
+        t.dueAt <= end!,
     );
   },
 });

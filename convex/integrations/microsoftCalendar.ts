@@ -1,6 +1,7 @@
 import type {
   CalendarEventInput,
   CalendarProvider,
+  CreateEventResult,
   OAuthTokens,
   RemoteCalendarEvent,
 } from "./calendarProvider";
@@ -21,7 +22,7 @@ export class MicrosoftCalendarProvider implements CalendarProvider {
   async createEvent(
     _tokens: OAuthTokens,
     _input: CalendarEventInput,
-  ): Promise<RemoteCalendarEvent> {
+  ): Promise<CreateEventResult> {
     throw new Error(
       "MicrosoftCalendarProvider is not implemented yet. Microsoft Graph is a planned future connector.",
     );

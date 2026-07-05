@@ -36,8 +36,22 @@ export default function MonitorsPage() {
 function Monitors({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   const [open, setOpen] = React.useState(false);
   const monitors = useQuery(api.monitors.list, { workspaceId });
-  const setStatus = useMutation(api.monitors.setStatus);
-  const remove = useMutation(api.monitors.remove);
+  const setStatusFn = useMutation(api.monitors.setStatus);
+  const removeFn = useMutation(api.monitors.remove);
+  const { toast } = useToast();
+
+  const withError = <T,>(p: Promise<T>) =>
+    p.catch((err) =>
+      toast({
+        title: "Action failed",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      }),
+    );
+  const setStatus = (args: Parameters<typeof setStatusFn>[0]) =>
+    withError(setStatusFn(args));
+  const remove = (args: Parameters<typeof removeFn>[0]) =>
+    withError(removeFn(args));
 
   return (
     <div>

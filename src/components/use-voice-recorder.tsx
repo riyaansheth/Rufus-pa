@@ -40,14 +40,24 @@ export function useVoiceRecorder({
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
         setRecording(false);
-        const blob = new Blob(chunksRef.current, {
-          type: recorder.mimeType || "audio/webm",
-        });
+        const mime = recorder.mimeType || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type: mime });
         if (blob.size === 0) return;
         setBusy(true);
         try {
+          // OpenAI infers the audio format from the filename extension, so it must
+          // match the actual mime type (Safari records audio/mp4, not webm).
+          const ext = mime.includes("mp4")
+            ? "mp4"
+            : mime.includes("ogg")
+              ? "ogg"
+              : mime.includes("mpeg")
+                ? "mp3"
+                : mime.includes("wav")
+                  ? "wav"
+                  : "webm";
           const form = new FormData();
-          form.append("audio", blob, "recording.webm");
+          form.append("audio", blob, `recording.${ext}`);
           const res = await fetch("/api/transcribe", {
             method: "POST",
             body: form,

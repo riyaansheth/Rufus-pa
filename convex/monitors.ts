@@ -121,10 +121,9 @@ export const remove = mutation({
     await writeAuditLog(ctx, {
       workspaceId,
       actorUserId: identity.clerkUserId,
-      action: "monitor.updated",
+      action: "monitor.deleted",
       entityType: "monitor",
       entityId: monitorId,
-      metadata: { deleted: true },
     });
   },
 });

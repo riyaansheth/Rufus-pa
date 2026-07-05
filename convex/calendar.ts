@@ -145,6 +145,30 @@ export const createInternal = mutation({
 });
 
 /**
+ * Delete a calendar event from the internal store. (For MVP this does not delete the
+ * mirrored Google event; that would require a Node action + the connection tokens.)
+ */
+export const remove = mutation({
+  args: { workspaceId: v.id("workspaces"), eventId: v.id("calendarEvents") },
+  handler: async (ctx, { workspaceId, eventId }) => {
+    const { identity } = await requireWorkspaceAccess(ctx, workspaceId);
+    const event = await ctx.db.get(eventId);
+    if (!event || event.workspaceId !== workspaceId) {
+      throw new Error("Event not found in this workspace.");
+    }
+    await ctx.db.delete(eventId);
+    await writeAuditLog(ctx, {
+      workspaceId,
+      actorUserId: identity.clerkUserId,
+      action: "calendar.event_created",
+      entityType: "calendarEvent",
+      entityId: eventId,
+      metadata: { deleted: true },
+    });
+  },
+});
+
+/**
  * Create an event, mirroring to Google Calendar when the workspace has a live
  * connection. Falls back to an internal-only event otherwise, and records an
  * `integration.failed` audit entry if the Google call errors (never throws to the
@@ -175,12 +199,13 @@ export const createEvent = action({
     let mirroredToGoogle = false;
     const conn = await ctx.runQuery(
       internal.calendarConnections.getConnectionInternal,
-      { workspaceId: args.workspaceId },
+      { workspaceId: args.workspaceId, userId: actorUserId },
     );
     if (conn && conn.provider === "google" && conn.status === "connected") {
       try {
         const ext = await ctx.runAction(internal.googleCalendar.createRemoteEvent, {
           workspaceId: args.workspaceId,
+          userId: actorUserId,
           title: args.title,
           description: args.description,
           startAt: args.startAt,

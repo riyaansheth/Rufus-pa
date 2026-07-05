@@ -1,15 +1,18 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { Bell } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
+import type { Id } from "@convex/_generated/dataModel";
 import { useWorkspace } from "@/components/workspace-provider";
 import { cn, formatRelative } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 export function NotificationBell() {
   const { activeWorkspaceId } = useWorkspace();
+  const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
 
@@ -22,6 +25,19 @@ export function NotificationBell() {
     activeWorkspaceId ? { workspaceId: activeWorkspaceId, limit: 20 } : "skip",
   );
   const markAllRead = useMutation(api.notifications.markAllRead);
+  const markRead = useMutation(api.notifications.markRead);
+
+  function onNotificationClick(n: {
+    _id: Id<"notifications">;
+    read: boolean;
+    href?: string;
+  }) {
+    if (activeWorkspaceId && !n.read) {
+      void markRead({ workspaceId: activeWorkspaceId, notificationId: n._id });
+    }
+    setOpen(false);
+    if (n.href) router.push(n.href);
+  }
 
   React.useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -73,10 +89,11 @@ export function NotificationBell() {
               </p>
             ) : (
               notifications.map((n) => (
-                <div
+                <button
                   key={n._id}
+                  onClick={() => onNotificationClick(n)}
                   className={cn(
-                    "border-b px-4 py-3 last:border-b-0",
+                    "block w-full border-b px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-accent",
                     !n.read && "bg-accent/40",
                   )}
                 >
@@ -87,7 +104,7 @@ export function NotificationBell() {
                   <p className="mt-1 text-xs text-muted-foreground">
                     {formatRelative(n.createdAt)}
                   </p>
-                </div>
+                </button>
               ))
             )}
           </div>

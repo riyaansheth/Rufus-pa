@@ -64,7 +64,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     activeWorkspace,
     role: activeWorkspace?.role ?? null,
     setActiveWorkspaceId,
-    isLoading: workspaces === undefined,
+    // Still "loading" while the list is in flight, OR while we have workspaces but
+    // haven't reconciled the active one yet (prevents a "select a workspace" flash).
+    isLoading:
+      workspaces === undefined ||
+      (workspaces.length > 0 && activeWorkspaceId === null),
   };
 
   return (

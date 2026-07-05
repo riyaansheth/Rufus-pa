@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
@@ -19,8 +20,14 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 
 export default function IntegrationsPage() {
+  // useSearchParams (read inside <Integrations>) requires a Suspense boundary in
+  // the Next.js App Router production build.
   return (
-    <RequireWorkspace>{(id) => <Integrations workspaceId={id} />}</RequireWorkspace>
+    <Suspense>
+      <RequireWorkspace>
+        {(id) => <Integrations workspaceId={id} />}
+      </RequireWorkspace>
+    </Suspense>
   );
 }
 
@@ -104,9 +111,14 @@ function Integrations({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
                     {google.lastError}
                   </p>
                 ) : null}
-                <a href={`/api/integrations/google/start?workspaceId=${workspaceId}`}>
-                  <Button size="sm">Connect Google Calendar</Button>
-                </a>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    window.location.href = `/api/integrations/google/start?workspaceId=${workspaceId}`;
+                  }}
+                >
+                  Connect Google Calendar
+                </Button>
                 <p className="text-xs text-muted-foreground">
                   You&apos;ll be redirected to Google to grant calendar access. Requires
                   GOOGLE_CLIENT_ID / SECRET / REDIRECT_URI to be configured.

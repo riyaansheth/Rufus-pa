@@ -32,7 +32,16 @@ export default function RemindersPage() {
 function Reminders({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   const [open, setOpen] = React.useState(false);
   const reminders = useQuery(api.reminders.list, { workspaceId });
-  const cancel = useMutation(api.reminders.cancel);
+  const cancelFn = useMutation(api.reminders.cancel);
+  const { toast } = useToast();
+  const cancel = (args: Parameters<typeof cancelFn>[0]) =>
+    cancelFn(args).catch((err) =>
+      toast({
+        title: "Could not cancel reminder",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      }),
+    );
 
   return (
     <div>

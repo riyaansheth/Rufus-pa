@@ -62,18 +62,46 @@ export const addMessage = internalMutation({
   },
 });
 
-/** INTERNAL — message history for building the model context. */
+/**
+ * INTERNAL — assert a conversation belongs to this workspace AND this user.
+ * Guards the assistant action against cross-tenant / cross-user conversation access
+ * (a passed conversationId is otherwise attacker-controlled).
+ */
+export const assertConversationOwnership = internalQuery({
+  args: {
+    conversationId: v.id("assistantConversations"),
+    workspaceId: v.id("workspaces"),
+    userId: v.string(),
+  },
+  handler: async (ctx, { conversationId, workspaceId, userId }) => {
+    const c = await ctx.db.get(conversationId);
+    if (!c || c.workspaceId !== workspaceId || c.userId !== userId) {
+      throw new Error("Conversation not found in this workspace.");
+    }
+    return true;
+  },
+});
+
+/**
+ * INTERNAL — message history for building the model context.
+ *
+ * Capped to the most recent messages so we never resend an unbounded conversation
+ * to OpenAI (token cost grows with length and eventually exceeds the context window).
+ */
+const MODEL_HISTORY_LIMIT = 20;
+
 export const historyForModel = internalQuery({
   args: { conversationId: v.id("assistantConversations") },
   handler: async (ctx, { conversationId }) => {
-    const rows = await ctx.db
+    // Take newest N (bounded read), then restore chronological order.
+    const recent = await ctx.db
       .query("assistantMessages")
       .withIndex("by_conversation", (q) =>
         q.eq("conversationId", conversationId),
       )
-      .order("asc")
-      .collect();
-    return rows.map((m) => ({ role: m.role, content: m.content }));
+      .order("desc")
+      .take(MODEL_HISTORY_LIMIT);
+    return recent.reverse().map((m) => ({ role: m.role, content: m.content }));
   },
 });
 

@@ -80,3 +80,24 @@ don't change. Placeholders (`Microsoft*`, `Browserbase*`, `Browserless*`) show t
   keep Node-only deps out of default-runtime files.
 - `OPENAI_API_KEY` must be set on **both** the Convex deployment (assistant) and Next env
   (the `/api/transcribe` route).
+- For Google Calendar token refresh to work, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
+  (and `GOOGLE_REDIRECT_URI`) must be set on the **Convex deployment** too — not only in Next
+  (where the OAuth routes read them). The mirror action refreshes the access token server-side
+  and persists it via `calendarConnections.updateAccessToken`.
+- Multi-user: workspaces have an `inviteCode`; teammates join via Settings → invite code
+  (`workspaces.join`). Owners/admins then assign roles. This is what makes the approver flow
+  testable with more than one person.
+
+<!-- convex-ai-start -->
+
+This project uses [Convex](https://convex.dev) as its backend.
+
+When working on Convex code, **always read
+`convex/_generated/ai/guidelines.md` first** for important guidelines on
+how to correctly use Convex APIs and patterns. The file contains rules that
+override what you may have learned about Convex from training data.
+
+Convex agent skills for common tasks can be installed by running
+`npx convex ai-files install`.
+
+<!-- convex-ai-end -->

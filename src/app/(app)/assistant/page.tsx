@@ -17,6 +17,7 @@ import {
 import { PageHeader, RequireWorkspace } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Select } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,11 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     React.useState<Id<"assistantConversations"> | null>(null);
   const [input, setInput] = React.useState("");
   const [sending, setSending] = React.useState(false);
+  // Shows the user's message immediately while the assistant is thinking (the query
+  // only subscribes once we have a conversationId after the round-trip).
+  const [pendingUserMessage, setPendingUserMessage] = React.useState<string | null>(
+    null,
+  );
   const { toast } = useToast();
   const sendMessage = useAction(api.assistant.sendMessage);
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -50,6 +56,9 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     api.assistantData.listMessages,
     conversationId ? { workspaceId, conversationId } : "skip",
   );
+  const conversations = useQuery(api.assistantData.listConversations, {
+    workspaceId,
+  });
 
   const {
     recording,
@@ -68,12 +77,15 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     const content = text.trim();
     if (!content || sending) return;
     setInput("");
+    setPendingUserMessage(content);
     setSending(true);
     try {
       const res = await sendMessage({
         workspaceId,
         conversationId: conversationId ?? undefined,
         content,
+        // Resolve "tomorrow at 4pm" in the user's actual timezone, not the UTC server.
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
       setConversationId(res.conversationId);
     } catch (err) {
@@ -85,10 +97,13 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
       setInput(content);
     } finally {
       setSending(false);
+      setPendingUserMessage(null);
     }
   }
 
-  const isEmpty = !conversationId || (messages && messages.length === 0);
+  const isEmpty =
+    !pendingUserMessage &&
+    (!conversationId || (messages && messages.length === 0));
 
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col">
@@ -96,15 +111,35 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         title="Assistant"
         description="Talk or type. It creates tasks, reminders, events, monitors, and approval requests."
         actions={
-          <Button
-            variant="outline"
-            onClick={() => {
-              setConversationId(null);
-              setInput("");
-            }}
-          >
-            <Plus /> New chat
-          </Button>
+          <div className="flex items-center gap-2">
+            {conversations && conversations.length > 0 ? (
+              <Select
+                className="w-52"
+                value={conversationId ?? ""}
+                onChange={(e) =>
+                  setConversationId(
+                    (e.target.value || null) as typeof conversationId,
+                  )
+                }
+              >
+                <option value="">Current chat</option>
+                {conversations.map((c) => (
+                  <option key={c._id} value={c._id}>
+                    {c.title}
+                  </option>
+                ))}
+              </Select>
+            ) : null}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setConversationId(null);
+                setInput("");
+              }}
+            >
+              <Plus /> New chat
+            </Button>
+          </div>
         }
       />
 
@@ -133,7 +168,14 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
               </div>
             </div>
           ) : (
-            messages?.map((m) => <MessageBubble key={m._id} message={m} />)
+            <>
+              {messages?.map((m) => <MessageBubble key={m._id} message={m} />)}
+              {pendingUserMessage ? (
+                <MessageBubble
+                  message={{ role: "user", content: pendingUserMessage }}
+                />
+              ) : null}
+            </>
           )}
           {sending ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">

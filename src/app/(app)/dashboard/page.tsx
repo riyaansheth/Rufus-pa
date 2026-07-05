@@ -33,7 +33,17 @@ export default function DashboardPage() {
 }
 
 function Dashboard({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
-  const tasks = useQuery(api.tasks.listDueToday, { workspaceId });
+  // Compute "today" in the browser's local timezone so the dashboard matches the
+  // user's day, not the UTC server day.
+  const dayStart = new Date();
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date();
+  dayEnd.setHours(23, 59, 59, 999);
+  const tasks = useQuery(api.tasks.listDueToday, {
+    workspaceId,
+    dayStartMs: dayStart.getTime(),
+    dayEndMs: dayEnd.getTime(),
+  });
   const reminders = useQuery(api.reminders.listUpcoming, { workspaceId, limit: 5 });
   const events = useQuery(api.calendar.listUpcoming, { workspaceId, limit: 5 });
   const approvals = useQuery(api.approvals.listPending, { workspaceId });

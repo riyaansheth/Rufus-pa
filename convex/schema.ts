@@ -86,10 +86,13 @@ export default defineSchema({
     name: v.string(),
     slug: v.string(),
     createdBy: v.string(), // clerkUserId
+    // Shareable code others use to join this workspace (as "member").
+    inviteCode: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_slug", ["slug"])
+    .index("by_inviteCode", ["inviteCode"])
     .index("by_createdAt", ["createdAt"]),
 
   memberships: defineTable({
@@ -133,7 +136,10 @@ export default defineSchema({
   })
     .index("by_workspace", ["workspaceId"])
     .index("by_workspace_status", ["workspaceId", "status"])
-    .index("by_remindAt", ["remindAt"]),
+    .index("by_remindAt", ["remindAt"])
+    // Cron sweeps only "scheduled" reminders that are due; this keeps the read
+    // bounded instead of re-scanning every already-triggered reminder each minute.
+    .index("by_status_remindAt", ["status", "remindAt"]),
 
   // --- Calendar -----------------------------------------------------------
   calendarConnections: defineTable({

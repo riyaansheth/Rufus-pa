@@ -36,11 +36,103 @@ When a request maps to a tool, call it. After acting, briefly confirm what you d
 
 Time handling: interpret relative times against the provided current time and express any date/time arguments as ISO 8601 strings (e.g. 2026-07-02T17:00:00). Assume 1-hour duration for meetings unless told otherwise.`;
 
-function toMs(value?: string | number | null): number | undefined {
+/**
+ * Minutes east of UTC for `tz` at a given instant (handles DST correctly by
+ * asking Intl what the wall-clock reads there).
+ */
+function tzOffsetMinutes(tz: string, atUtcMs: number): number {
+  try {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    const p = dtf.formatToParts(new Date(atUtcMs)).reduce<Record<string, string>>(
+      (acc, part) => {
+        acc[part.type] = part.value;
+        return acc;
+      },
+      {},
+    );
+    const asUTC = Date.UTC(
+      +p.year,
+      +p.month - 1,
+      +p.day,
+      +p.hour,
+      +p.minute,
+      +p.second,
+    );
+    return Math.round((asUTC - atUtcMs) / 60000);
+  } catch {
+    return 0;
+  }
+}
+
+/** Start/end epoch (ms) of "today" as seen in the user's timezone `tz`. */
+function todayWindowInTz(tz: string): { dayStartMs: number; dayEndMs: number } {
+  const nowMs = Date.now();
+  let y: number, m: number, d: number;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .formatToParts(new Date(nowMs))
+      .reduce<Record<string, string>>((acc, p) => {
+        acc[p.type] = p.value;
+        return acc;
+      }, {});
+    y = +parts.year;
+    m = +parts.month;
+    d = +parts.day;
+  } catch {
+    const now = new Date(nowMs);
+    y = now.getUTCFullYear();
+    m = now.getUTCMonth() + 1;
+    d = now.getUTCDate();
+  }
+  const startUtcGuess = Date.UTC(y, m - 1, d, 0, 0, 0);
+  const offsetMin = tzOffsetMinutes(tz, startUtcGuess);
+  const dayStartMs = startUtcGuess - offsetMin * 60000;
+  return { dayStartMs, dayEndMs: dayStartMs + 24 * 60 * 60 * 1000 - 1 };
+}
+
+/**
+ * Parse a datetime the assistant produced into an epoch (ms).
+ *
+ * If the string already carries a timezone offset (or "Z"), it is unambiguous and
+ * parsed directly. If it is a *naive* wall-clock string (no offset), we interpret it
+ * in the user's timezone `tz` — NOT the server's UTC — which is the whole point of
+ * the timezone fix. Without this, "4 PM" from an IST user would land at 4 PM UTC.
+ */
+function toMs(
+  value?: string | number | null,
+  tz?: string,
+): number | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (typeof value === "number") return value;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? undefined : parsed;
+
+  const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value.trim());
+  if (hasOffset || !tz) {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+
+  // Naive wall-clock in `tz`: treat as UTC, then subtract the zone offset.
+  const asUtc = Date.parse(value.endsWith("Z") ? value : value + "Z");
+  if (Number.isNaN(asUtc)) {
+    const fallback = Date.parse(value);
+    return Number.isNaN(fallback) ? undefined : fallback;
+  }
+  const offsetMin = tzOffsetMinutes(tz, asUtc);
+  return asUtc - offsetMin * 60000;
 }
 
 // --- Tool schemas (surfaced to OpenAI) ------------------------------------
@@ -241,6 +333,9 @@ export const sendMessage = action({
     workspaceId: v.id("workspaces"),
     conversationId: v.optional(v.id("assistantConversations")),
     content: v.string(),
+    // IANA timezone from the browser (e.g. "Asia/Kolkata"). Used so relative times
+    // ("tomorrow at 4pm") resolve in the USER's timezone, not the UTC server.
+    timezone: v.optional(v.string()),
   },
   handler: async (
     ctx,
@@ -253,14 +348,27 @@ export const sendMessage = action({
     const actorUserId = me?.clerkUserId;
     if (!actorUserId) throw new Error("Unauthenticated.");
 
-    // Ensure conversation.
-    const conversationId: Id<"assistantConversations"> =
-      args.conversationId ??
-      (await ctx.runMutation(internal.assistantData.createConversation, {
+    // Ensure conversation. A CLIENT-SUPPLIED conversationId is untrusted, so verify
+    // it belongs to this workspace AND this user before using it (prevents reading or
+    // writing another user's/workspace's conversation).
+    let conversationId: Id<"assistantConversations">;
+    if (args.conversationId) {
+      await ctx.runQuery(internal.assistantData.assertConversationOwnership, {
+        conversationId: args.conversationId,
         workspaceId: args.workspaceId,
         userId: actorUserId,
-        title: args.content,
-      }));
+      });
+      conversationId = args.conversationId;
+    } else {
+      conversationId = await ctx.runMutation(
+        internal.assistantData.createConversation,
+        {
+          workspaceId: args.workspaceId,
+          userId: actorUserId,
+          title: args.content,
+        },
+      );
+    }
 
     // Persist user message + audit the command.
     await ctx.runMutation(internal.assistantData.addMessage, {
@@ -288,10 +396,23 @@ export const sendMessage = action({
         conversationId,
       });
     const now = new Date();
+    const tz = args.timezone || "UTC";
+    // Current local time in the user's timezone, so the model reasons about
+    // "today"/"tomorrow" correctly and emits offset-bearing ISO datetimes.
+    let localNow = now.toISOString();
+    try {
+      localNow = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        dateStyle: "full",
+        timeStyle: "long",
+      }).format(now);
+    } catch {
+      // invalid tz → fall back to ISO/UTC
+    }
     const messages: ChatCompletionMessageParam[] = [
       {
         role: "system",
-        content: `${SYSTEM_PROMPT}\n\nCurrent time: ${now.toISOString()} (server time).`,
+        content: `${SYSTEM_PROMPT}\n\nThe user's timezone is ${tz}. The current local time for the user is ${localNow}. Interpret all relative times (e.g. "tomorrow at 4pm", "Friday morning") in the user's timezone, and output every date/time argument as an ISO 8601 string that INCLUDES the timezone offset (e.g. 2026-07-06T16:00:00+05:30). Never output a datetime without an offset.`,
       },
       ...history
         .filter((m) => m.role === "user" || m.role === "assistant")
@@ -325,10 +446,21 @@ export const sendMessage = action({
           tool_calls: choice.tool_calls,
         });
         for (const call of choice.tool_calls) {
-          if (call.type !== "function") continue;
+          // OpenAI requires EXACTLY one tool result per tool_call id. Even for an
+          // unsupported (non-function) call we must emit a result, or the next
+          // request 400s with a dangling tool_call_id.
+          if (call.type !== "function") {
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: JSON.stringify({ error: "Unsupported tool call type." }),
+            });
+            continue;
+          }
           const { output, action } = await dispatchTool(
             ctx,
             args.workspaceId,
+            tz,
             call.function.name,
             call.function.arguments,
           );
@@ -370,6 +502,7 @@ export const sendMessage = action({
 async function dispatchTool(
   ctx: ActionCtx,
   workspaceId: Id<"workspaces">,
+  tz: string,
   name: string,
   rawArgs: string,
 ): Promise<{ output: unknown; action?: ActionDescriptor }> {
@@ -389,7 +522,7 @@ async function dispatchTool(
           title: a.title,
           description: a.description,
           priority: a.priority,
-          dueAt: toMs(a.dueAt),
+          dueAt: toMs(a.dueAt, tz),
         });
         return {
           output: { ok: true, taskId: id },
@@ -404,7 +537,7 @@ async function dispatchTool(
       }
       case "createReminder": {
         const a = schemas.createReminder.parse(parsed);
-        const remindAt = toMs(a.remindAt);
+        const remindAt = toMs(a.remindAt, tz);
         if (!remindAt) return { output: { error: "Could not parse remindAt time." } };
         const id = await ctx.runMutation(api.reminders.create, {
           workspaceId,
@@ -425,9 +558,9 @@ async function dispatchTool(
       }
       case "createCalendarEvent": {
         const a = schemas.createCalendarEvent.parse(parsed);
-        const startAt = toMs(a.startAt);
+        const startAt = toMs(a.startAt, tz);
         if (!startAt) return { output: { error: "Could not parse startAt time." } };
-        const endAt = toMs(a.endAt) ?? startAt + 60 * 60 * 1000;
+        const endAt = toMs(a.endAt, tz) ?? startAt + 60 * 60 * 1000;
         const res = await ctx.runAction(api.calendar.createEvent, {
           workspaceId,
           title: a.title,
@@ -507,8 +640,13 @@ async function dispatchTool(
         return { output: { approvals: rows } };
       }
       case "listTodaySchedule": {
+        const { dayStartMs, dayEndMs } = todayWindowInTz(tz);
         const [tasks, reminders, events] = await Promise.all([
-          ctx.runQuery(api.tasks.listDueToday, { workspaceId }),
+          ctx.runQuery(api.tasks.listDueToday, {
+            workspaceId,
+            dayStartMs,
+            dayEndMs,
+          }),
           ctx.runQuery(api.reminders.listUpcoming, { workspaceId, limit: 10 }),
           ctx.runQuery(api.calendar.listUpcoming, { workspaceId, limit: 10 }),
         ]);

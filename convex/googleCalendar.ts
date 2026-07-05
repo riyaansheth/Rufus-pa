@@ -35,12 +35,25 @@ export class GoogleCalendarProvider implements CalendarProvider {
   async createEvent(
     tokens: OAuthTokens,
     input: CalendarEventInput,
-  ): Promise<RemoteCalendarEvent> {
+  ): Promise<{
+    event: RemoteCalendarEvent;
+    refreshed?: { accessToken: string; expiresAt?: number };
+  }> {
     const auth = this.client();
     auth.setCredentials({
       access_token: tokens.accessToken,
       refresh_token: tokens.refreshToken,
       expiry_date: tokens.expiresAt,
+    });
+    // Capture an auto-refreshed access token so callers can persist it.
+    let refreshed: { accessToken: string; expiresAt?: number } | undefined;
+    auth.on("tokens", (t) => {
+      if (t.access_token) {
+        refreshed = {
+          accessToken: t.access_token,
+          expiresAt: t.expiry_date ?? undefined,
+        };
+      }
     });
     const calendar = google.calendar({ version: "v3", auth });
     const res = await calendar.events.insert({
@@ -55,11 +68,14 @@ export class GoogleCalendarProvider implements CalendarProvider {
       },
     });
     return {
-      externalId: res.data.id ?? "",
-      htmlLink: res.data.htmlLink ?? undefined,
-      start: res.data.start?.dateTime ?? undefined,
-      end: res.data.end?.dateTime ?? undefined,
-      title: res.data.summary ?? undefined,
+      event: {
+        externalId: res.data.id ?? "",
+        htmlLink: res.data.htmlLink ?? undefined,
+        start: res.data.start?.dateTime ?? undefined,
+        end: res.data.end?.dateTime ?? undefined,
+        title: res.data.summary ?? undefined,
+      },
+      refreshed,
     };
   }
 
@@ -101,6 +117,7 @@ const provider = new GoogleCalendarProvider();
 export const createRemoteEvent = internalAction({
   args: {
     workspaceId: v.id("workspaces"),
+    userId: v.optional(v.string()),
     title: v.string(),
     description: v.optional(v.string()),
     startAt: v.number(),
@@ -111,7 +128,7 @@ export const createRemoteEvent = internalAction({
   handler: async (ctx, args): Promise<{ externalId: string; htmlLink?: string }> => {
     const conn = await ctx.runQuery(
       internal.calendarConnections.getConnectionInternal,
-      { workspaceId: args.workspaceId },
+      { workspaceId: args.workspaceId, userId: args.userId },
     );
     if (!conn || !conn.accessToken) {
       throw new Error("No connected Google Calendar for this workspace.");
@@ -124,7 +141,7 @@ export const createRemoteEvent = internalAction({
       location: args.location,
       attendees: args.attendees,
     };
-    const event = await provider.createEvent(
+    const { event, refreshed } = await provider.createEvent(
       {
         accessToken: conn.accessToken,
         refreshToken: conn.refreshToken ?? undefined,
@@ -133,6 +150,14 @@ export const createRemoteEvent = internalAction({
       },
       input,
     );
+    // Persist a refreshed access token so we don't re-refresh on every call.
+    if (refreshed?.accessToken) {
+      await ctx.runMutation(internal.calendarConnections.updateAccessToken, {
+        workspaceId: args.workspaceId,
+        accessToken: refreshed.accessToken,
+        expiresAt: refreshed.expiresAt,
+      });
+    }
     return { externalId: event.externalId, htmlLink: event.htmlLink };
   },
 });

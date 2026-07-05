@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
-import { Settings2, Users, Plug, ShieldCheck } from "lucide-react";
+import { Settings2, Users, Plug, ShieldCheck, Copy, RefreshCw, UserPlus } from "lucide-react";
 import { PageHeader, RequireWorkspace } from "@/components/page-shell";
 import { useWorkspace } from "@/components/workspace-provider";
 import {
@@ -32,6 +32,11 @@ function SettingsView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   const isAdmin = role === "owner" || role === "admin";
   const members = useQuery(api.memberships.list, { workspaceId });
   const changeRole = useMutation(api.memberships.changeRole);
+  const inviteCode = useQuery(
+    api.workspaces.inviteCode,
+    isAdmin ? { workspaceId } : "skip",
+  );
+  const regenerateInvite = useMutation(api.workspaces.regenerateInviteCode);
   const { toast } = useToast();
 
   return (
@@ -59,6 +64,58 @@ function SettingsView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
             </p>
           </CardContent>
         </Card>
+
+        {isAdmin ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <UserPlus className="size-4" /> Invite members
+              </CardTitle>
+              <CardDescription>
+                Share this code. Teammates go to their workspace switcher → “New
+                workspace” → “Join with a code” to join as a member. Owners/admins
+                can then assign roles below.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-2">
+              <code className="rounded-md border bg-muted px-3 py-2 font-mono text-lg tracking-widest">
+                {inviteCode ?? "————————"}
+              </code>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!inviteCode}
+                onClick={() => {
+                  if (inviteCode) {
+                    navigator.clipboard.writeText(inviteCode);
+                    toast({ title: "Invite code copied", variant: "success" });
+                  }
+                }}
+              >
+                <Copy /> Copy
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await regenerateInvite({ workspaceId });
+                    toast({ title: "New invite code generated" });
+                  } catch (err) {
+                    toast({
+                      title: "Could not regenerate",
+                      description:
+                        err instanceof Error ? err.message : undefined,
+                      variant: "error",
+                    });
+                  }
+                }}
+              >
+                <RefreshCw /> Regenerate
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Card>
           <CardHeader className="flex-row items-center justify-between">

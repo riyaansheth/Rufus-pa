@@ -32,13 +32,19 @@ export type OAuthTokens = {
   scope?: string;
 };
 
+export type CreateEventResult = {
+  event: RemoteCalendarEvent;
+  /** A refreshed access token, if the provider auto-refreshed during the call. */
+  refreshed?: { accessToken: string; expiresAt?: number };
+};
+
 export interface CalendarProvider {
   readonly id: "google" | "microsoft";
   /** Create an event in the remote calendar and return its external id. */
   createEvent(
     tokens: OAuthTokens,
     input: CalendarEventInput,
-  ): Promise<RemoteCalendarEvent>;
+  ): Promise<CreateEventResult>;
   /** List upcoming events from the remote calendar. */
   listUpcoming(
     tokens: OAuthTokens,

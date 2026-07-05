@@ -34,10 +34,24 @@ function Approvals({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   const all = useQuery(api.approvals.list, { workspaceId });
   const decide = useMutation(api.approvals.decide);
   const cancel = useMutation(api.approvals.cancel);
+  const me = useQuery(api.users.me);
   const { toast } = useToast();
 
   const pending = all?.filter((a) => a.status === "pending") ?? [];
   const history = all?.filter((a) => a.status !== "pending") ?? [];
+
+  async function onCancel(approvalId: Id<"approvalRequests">) {
+    try {
+      await cancel({ workspaceId, approvalId });
+      toast({ title: "Request cancelled" });
+    } catch (err) {
+      toast({
+        title: "Could not cancel",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      });
+    }
+  }
 
   async function onDecide(
     approvalId: Id<"approvalRequests">,
@@ -156,16 +170,16 @@ function Approvals({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
                           approver to decide.
                         </p>
                       )}
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="ml-auto"
-                        onClick={() =>
-                          cancel({ workspaceId, approvalId: a._id })
-                        }
-                      >
-                        Cancel
-                      </Button>
+                      {canApprove || a.requestedBy === me?.clerkUserId ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="ml-auto"
+                          onClick={() => onCancel(a._id)}
+                        >
+                          Cancel
+                        </Button>
+                      ) : null}
                     </div>
                   </CardContent>
                 </Card>

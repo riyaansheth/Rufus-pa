@@ -27,13 +27,15 @@ export const triggerDueReminders = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
+    // Only scan reminders that are still scheduled AND due — bounded per sweep.
     const due = await ctx.db
       .query("reminders")
-      .withIndex("by_remindAt", (q) => q.lte("remindAt", now))
+      .withIndex("by_status_remindAt", (q) =>
+        q.eq("status", "scheduled").lte("remindAt", now),
+      )
       .collect();
     let triggered = 0;
     for (const r of due) {
-      if (r.status !== "scheduled") continue;
       await ctx.db.patch(r._id, { status: "triggered", updatedAt: now });
       await notify(ctx, {
         workspaceId: r.workspaceId,

@@ -54,7 +54,7 @@ export const changeRole = mutation({
     role: roleValidator,
   },
   handler: async (ctx, { workspaceId, membershipId, role }) => {
-    const { identity } = await requireWorkspaceAccess(
+    const { identity, role: actorRole } = await requireWorkspaceAccess(
       ctx,
       workspaceId,
       ADMIN_ROLES,
@@ -62,6 +62,19 @@ export const changeRole = mutation({
     const target = await ctx.db.get(membershipId);
     if (!target || target.workspaceId !== workspaceId) {
       throw new Error("Membership not found in this workspace.");
+    }
+    // Only an owner may grant ownership or change an existing owner's role.
+    // This stops an admin from self-promoting to owner or seizing/removing owners.
+    if ((role === "owner" || target.role === "owner") && actorRole !== "owner") {
+      throw new Error("Only an owner can grant or change ownership.");
+    }
+    // An admin cannot elevate their own membership.
+    if (
+      target.userId === identity.clerkUserId &&
+      actorRole !== "owner" &&
+      role !== target.role
+    ) {
+      throw new Error("You cannot change your own role.");
     }
     if (target.role === "owner" && role !== "owner") {
       const owners = (

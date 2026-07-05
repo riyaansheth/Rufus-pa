@@ -2,10 +2,10 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useAction, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
-import { Calendar, Plus, Loader2 } from "lucide-react";
+import { Calendar, Plus, Loader2, Trash2 } from "lucide-react";
 import { PageHeader, EmptyState, RequireWorkspace } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,8 @@ function CalendarView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   const [open, setOpen] = React.useState(false);
   const events = useQuery(api.calendar.listUpcoming, { workspaceId, limit: 50 });
   const connections = useQuery(api.calendarConnections.status, { workspaceId });
+  const removeEvent = useMutation(api.calendar.remove);
+  const { toast } = useToast();
   const googleConnected = connections?.some(
     (c) => c.provider === "google" && c.status === "connected",
   );
@@ -103,6 +105,26 @@ function CalendarView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
                 <Badge variant={e.source === "google" ? "info" : "secondary"}>
                   {e.source}
                 </Badge>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Delete event"
+                  onClick={async () => {
+                    try {
+                      await removeEvent({ workspaceId, eventId: e._id });
+                      toast({ title: "Event deleted", variant: "success" });
+                    } catch (err) {
+                      toast({
+                        title: "Could not delete event",
+                        description:
+                          err instanceof Error ? err.message : undefined,
+                        variant: "error",
+                      });
+                    }
+                  }}
+                >
+                  <Trash2 className="text-muted-foreground" />
+                </Button>
               </CardContent>
             </Card>
           ))}
