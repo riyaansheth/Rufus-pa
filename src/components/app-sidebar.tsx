@@ -12,9 +12,9 @@ import {
   ShieldCheck,
   Settings,
   ScrollText,
-  ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Logo } from "@/components/logo";
 import { useWorkspace } from "@/components/workspace-provider";
 
 const NAV = [
@@ -40,7 +40,7 @@ export function AppSidebar() {
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r bg-card/40 md:flex">
       <div className="flex h-14 items-center gap-2 border-b px-5">
-        <ShieldAlert className="size-5 text-primary" />
+        <Logo size={22} />
         <span className="font-semibold tracking-tight">Rufuspa</span>
       </div>
       <nav className="flex-1 space-y-1 p-3">

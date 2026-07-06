@@ -181,11 +181,10 @@ export const updateInternal = mutation({
     await writeAuditLog(ctx, {
       workspaceId,
       actorUserId: identity.clerkUserId,
-      action: "calendar.event_created",
+      action: "calendar.event_updated",
       entityType: "calendarEvent",
       entityId: eventId,
       metadata: {
-        updated: true,
         changes: Object.keys(patch).filter((k) => k !== "updatedAt"),
       },
     });
@@ -231,7 +230,7 @@ export const remove = mutation({
     await writeAuditLog(ctx, {
       workspaceId,
       actorUserId: identity.clerkUserId,
-      action: "calendar.event_created",
+      action: "calendar.event_deleted",
       entityType: "calendarEvent",
       entityId: eventId,
       metadata: { deleted: true },
@@ -294,6 +293,7 @@ export const createEvent = action({
       } catch (err) {
         await ctx.runMutation(internal.calendarConnections.recordFailure, {
           workspaceId: args.workspaceId,
+          userId: actorUserId,
           error: err instanceof Error ? err.message : String(err),
         });
       }

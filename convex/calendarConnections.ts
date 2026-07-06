@@ -185,17 +185,25 @@ export const upsertClerkConnection = mutation({
   },
 });
 
-/** Update refreshed access token (called internally by the Google provider). */
+/**
+ * Update refreshed access token (called internally by the Google provider).
+ * MUST target the acting user's own connection — a workspace can hold several
+ * users' Google connections, and writing A's refreshed token onto B's row would
+ * hand B access to A's calendar.
+ */
 export const updateAccessToken = internalMutation({
   args: {
     workspaceId: v.id("workspaces"),
+    userId: v.string(),
     accessToken: v.string(),
     expiresAt: v.optional(v.number()),
   },
-  handler: async (ctx, { workspaceId, accessToken, expiresAt }) => {
+  handler: async (ctx, { workspaceId, userId, accessToken, expiresAt }) => {
     const conn = await ctx.db
       .query("calendarConnections")
-      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .withIndex("by_workspace_user", (q) =>
+        q.eq("workspaceId", workspaceId).eq("userId", userId),
+      )
       .first();
     if (conn) {
       await ctx.db.patch(conn._id, {
@@ -208,13 +216,23 @@ export const updateAccessToken = internalMutation({
   },
 });
 
-/** Record an integration failure + audit log (called on Google API errors). */
+/**
+ * Record an integration failure + audit log (called on Google API errors).
+ * Scoped to the acting user's own connection so one user's API error can't
+ * disable (or mis-attribute a failure to) a teammate's healthy connection.
+ */
 export const recordFailure = internalMutation({
-  args: { workspaceId: v.id("workspaces"), error: v.string() },
-  handler: async (ctx, { workspaceId, error }) => {
+  args: {
+    workspaceId: v.id("workspaces"),
+    userId: v.string(),
+    error: v.string(),
+  },
+  handler: async (ctx, { workspaceId, userId, error }) => {
     const conn = await ctx.db
       .query("calendarConnections")
-      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .withIndex("by_workspace_user", (q) =>
+        q.eq("workspaceId", workspaceId).eq("userId", userId),
+      )
       .first();
     if (conn) {
       await ctx.db.patch(conn._id, {
@@ -237,9 +255,13 @@ export const disconnect = mutation({
   args: { workspaceId: v.id("workspaces"), provider: calendarProviderValidator },
   handler: async (ctx, { workspaceId, provider }) => {
     const { identity } = await requireWorkspaceAccess(ctx, workspaceId);
+    // ONLY the caller's own connection — disconnect must never revoke or wipe a
+    // teammate's calendar tokens. Calendars are strictly per-user.
     const conns = await ctx.db
       .query("calendarConnections")
-      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .withIndex("by_workspace_user", (q) =>
+        q.eq("workspaceId", workspaceId).eq("userId", identity.clerkUserId),
+      )
       .collect();
     for (const c of conns) {
       if (c.provider === provider) {

@@ -13,7 +13,7 @@ import * as React from "react";
  * Privacy: recording only ever starts from an explicit user action.
  */
 
-const SILENCE_STOP_MS = 1800; // stop this long after speech ends
+const SILENCE_STOP_MS = 1100; // stop this long after speech ends (snappy turn-taking)
 const SPEECH_RMS_THRESHOLD = 0.02; // normalized RMS above this counts as speech
 const MAX_RECORDING_MS = 60_000; // hard cap
 

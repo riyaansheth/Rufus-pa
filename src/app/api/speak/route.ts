@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import OpenAI from "openai";
 
+/** Parse OPENAI_TTS_SPEED into OpenAI's accepted 0.25–4.0 range. */
+function clampSpeed(raw: string | undefined, fallback: number): number {
+  const n = raw ? Number(raw) : fallback;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(4, Math.max(0.25, n));
+}
+
 /**
  * Text-to-speech via OpenAI, so the assistant can talk back. Runs server-side —
  * the API key never reaches the browser. Requires an authenticated Clerk session.
@@ -34,14 +41,32 @@ export async function POST(req: NextRequest) {
 
   try {
     const openai = new OpenAI({ apiKey });
-    const model = process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts";
+    // tts-1 is OpenAI's low-latency (real-time) speech model — noticeably faster
+    // to first audio than gpt-4o-mini-tts. Override via OPENAI_TTS_MODEL.
+    const model = process.env.OPENAI_TTS_MODEL || "tts-1";
     const voice = process.env.OPENAI_TTS_VOICE || "alloy";
+    // Speak a touch faster than default (1.0). Tunable via OPENAI_TTS_SPEED.
+    const speed = clampSpeed(process.env.OPENAI_TTS_SPEED, 1.1);
     const speech = await openai.audio.speech.create({
       model,
       voice,
       input: text,
       response_format: "mp3",
+      speed,
     });
+    // Stream the audio straight through so the browser can start playing before
+    // the whole clip is synthesized (big perceived-latency win). Fall back to a
+    // buffered response if the SDK didn't hand us a stream body.
+    if (speech.body) {
+      return new NextResponse(speech.body as ReadableStream, {
+        status: 200,
+        headers: {
+          "Content-Type": "audio/mpeg",
+          "Cache-Control": "no-store",
+          "Transfer-Encoding": "chunked",
+        },
+      });
+    }
     const buffer = Buffer.from(await speech.arrayBuffer());
     return new NextResponse(buffer, {
       status: 200,

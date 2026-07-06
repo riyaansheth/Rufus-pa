@@ -129,25 +129,124 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      if (!res.ok) return; // TTS is best-effort; the text reply is on screen
-      const url = URL.createObjectURL(await res.blob());
+      if (!res.ok || !res.body) return; // TTS is best-effort; the text is on screen
       setSpeaking(true);
-      await new Promise<void>((resolve) => {
-        const audio = new Audio(url);
-        audioRef.current = audio;
-        const done = () => {
-          URL.revokeObjectURL(url);
-          setSpeaking(false);
-          resolve();
-        };
-        audio.onended = done;
-        audio.onerror = done;
-        audio.onpause = done; // stopAudio() mid-playback also resolves
-        void audio.play().catch(done);
-      });
+      // Prefer streaming playback (starts before the whole clip is synthesized).
+      const canStream =
+        typeof MediaSource !== "undefined" &&
+        typeof MediaSource.isTypeSupported === "function" &&
+        MediaSource.isTypeSupported("audio/mpeg");
+      if (canStream) {
+        await playStream(res.body);
+      } else {
+        const url = URL.createObjectURL(await res.blob());
+        await playUrl(url, () => URL.revokeObjectURL(url));
+      }
     } catch {
       setSpeaking(false);
     }
+  }
+
+  /** Play a finished object URL, resolving when playback ends/stops. */
+  function playUrl(url: string, onDone?: () => void): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      const done = () => {
+        onDone?.();
+        setSpeaking(false);
+        resolve();
+      };
+      audio.onended = done;
+      audio.onerror = done;
+      audio.onpause = done;
+      void audio.play().catch(done);
+    });
+  }
+
+  /**
+   * Low-latency playback: feed the streamed MP3 into a MediaSource so audio
+   * starts within a chunk or two instead of waiting for the full synthesis.
+   */
+  function playStream(body: ReadableStream<Uint8Array>): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const mediaSource = new MediaSource();
+      const url = URL.createObjectURL(mediaSource);
+      const audio = new Audio();
+      audio.src = url;
+      audioRef.current = audio;
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        URL.revokeObjectURL(url);
+        setSpeaking(false);
+        resolve();
+      };
+      audio.onended = done;
+      audio.onerror = done;
+      audio.onpause = done; // stopAudio() pauses → resolves
+      mediaSource.addEventListener("sourceopen", () => {
+        let sb: SourceBuffer;
+        try {
+          sb = mediaSource.addSourceBuffer("audio/mpeg");
+        } catch {
+          done();
+          return;
+        }
+        const queue: Uint8Array[] = [];
+        let reading = true;
+        const flush = () => {
+          if (sb.updating || queue.length === 0) return;
+          try {
+            sb.appendBuffer(queue.shift()! as BufferSource);
+          } catch {
+            /* buffer full or closed — ignore, playback continues */
+          }
+        };
+        sb.addEventListener("updateend", () => {
+          flush();
+          if (!reading && !sb.updating && queue.length === 0) {
+            try {
+              if (mediaSource.readyState === "open") mediaSource.endOfStream();
+            } catch {
+              /* already ended */
+            }
+          }
+        });
+        const reader = body.getReader();
+        const pump = async () => {
+          try {
+            for (;;) {
+              // Abandon the stream if playback was stopped/replaced.
+              if (audioRef.current !== audio) {
+                reader.cancel().catch(() => {});
+                return;
+              }
+              const { done: rdone, value } = await reader.read();
+              if (rdone) break;
+              if (value) {
+                queue.push(value);
+                flush();
+              }
+            }
+          } catch {
+            /* stream error — end with whatever we have */
+          } finally {
+            reading = false;
+            if (!sb.updating && queue.length === 0) {
+              try {
+                if (mediaSource.readyState === "open") mediaSource.endOfStream();
+              } catch {
+                /* already ended */
+              }
+            }
+          }
+        };
+        void pump();
+      });
+      void audio.play().catch(done);
+    });
   }
 
   function enterVoiceMode() {

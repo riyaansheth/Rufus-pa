@@ -19,15 +19,21 @@ export function buildDeepLink(args: {
   // An explicit URL from the user always wins.
   if (args.url && args.url.trim()) return args.url.trim();
 
-  const q = encodeURIComponent((args.query ?? args.title).trim());
+  // Prefer the clean search term (movie/product name) over the verbose monitor
+  // title, which often carries dates/seats/venue text that breaks search.
+  const term = (args.query ?? args.title).trim();
   switch (args.kind) {
     case "movie_ticket":
-      // BookMyShow search — resolves to the movie page for the user's city.
-      return `https://in.bookmyshow.com/explore/home/search?q=${q}`;
-    case "event":
-      return `https://in.bookmyshow.com/explore/home/search?q=${q}`;
+    case "event": {
+      // BookMyShow has no public deep link to a specific movie's booking page
+      // without its internal event id (which we won't scrape). A city-scoped
+      // Google search reliably lands the top result on the exact BookMyShow
+      // movie page — one tap to the right film, ToS-friendly.
+      const parts = [term, args.city, "BookMyShow book tickets"].filter(Boolean);
+      return `https://www.google.com/search?q=${encodeURIComponent(parts.join(" "))}`;
+    }
     case "product":
-      return `https://www.amazon.in/s?k=${q}`;
+      return `https://www.amazon.in/s?k=${encodeURIComponent(term)}`;
     default:
       return undefined;
   }

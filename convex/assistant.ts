@@ -37,7 +37,10 @@ CRITICAL SAFETY RULES — never violate these:
 - Never claim an action succeeded unless a tool call actually returned success.
 - Only ask for missing details when genuinely required; otherwise pick sensible defaults and proceed.
 
-For movie/event ticket requests: include the user's city in createAvailabilityMonitor when they mention it (or ask once if unknown); a booking deep link is generated automatically so they land one tap from seat selection when bookings open.
+For movie/event ticket requests:
+- Always pass the BARE film/event name as searchQuery (e.g. "Obsession"), separate from the verbose title — this builds a booking deep link that opens the exact movie for the user's city (not just the provider's homepage). Include the user's city when mentioned (or ask once).
+- RECOMMENDED SEATS: use the webSearch tool to look up the best/recommended seats for that specific cinema (e.g. "best seats at PVR Marine Lines Mumbai" or general guidance for that screen), and put a short recommendation in the monitor's note and the approval description (e.g. "Recommended: rows H–K, center block"). You are only ADVISING which seats to pick — you never select seats or complete booking. The human chooses seats and pays on the provider's site.
+- A booking deep link is generated automatically so they land one tap from seat selection when bookings open.
 
 When a request maps to a tool, call it. After acting, briefly confirm what you did and the clear next step. Example phrases:
 - "I created a calendar event for tomorrow at 5:00 PM."
@@ -175,11 +178,20 @@ const tools: ChatCompletionTool[] = [
             enum: ["product", "movie_ticket", "event", "generic_url"],
           },
           title: { type: "string" },
+          searchQuery: {
+            type: "string",
+            description:
+              "The BARE movie/product/event name to search for on the provider (e.g. just 'Obsession'), WITHOUT dates, seat counts, or venue text. Used to build the booking deep link.",
+          },
           url: { type: "string" },
           city: { type: "string", description: "User's city (for ticket bookings)" },
           priceBelow: { type: "number", description: "Alert when price drops below this" },
           currency: { type: "string" },
-          note: { type: "string" },
+          note: {
+            type: "string",
+            description:
+              "Any extra context, e.g. recommended/best seats you found for this cinema (from webSearch).",
+          },
         },
         required: ["type", "title"],
       },
@@ -384,6 +396,7 @@ const schemas = {
   createAvailabilityMonitor: z.object({
     type: z.enum(["product", "movie_ticket", "event", "generic_url"]),
     title: z.string().min(1),
+    searchQuery: z.string().optional(),
     url: z.string().optional(),
     city: z.string().optional(),
     priceBelow: z.number().optional(),
@@ -627,29 +640,49 @@ export const sendMessage = action({
 
     const openai = new OpenAI({ apiKey });
     const model = process.env.OPENAI_ASSISTANT_MODEL || "gpt-5";
+    const isGpt5 = /^gpt-5/.test(model);
     // GPT-5 / reasoning models (o-series) only accept the default temperature (1);
     // sending a custom value 400s. Older chat models keep the low-variance setting.
-    const isReasoningModel = /^(gpt-5|o\d)/.test(model);
+    const isReasoningModel = isGpt5 || /^o\d/.test(model);
     // SPEED: GPT-5 defaults to heavy "thinking" before every reply, which is far
     // too slow for a quick scheduling assistant. Run it at MINIMAL reasoning effort
     // and LOW verbosity so it answers fast while staying GPT-5. Dial up with
     // OPENAI_REASONING_EFFORT (minimal|low|medium|high) if you want deeper reasoning.
-    const reasoningEffort = process.env.OPENAI_REASONING_EFFORT || "minimal";
+    // Note: "minimal" is GPT-5-only; the o-series floor is "low", and `verbosity`
+    // is a GPT-5-only param — sending either to the o-series would 400.
+    const reasoningEffort =
+      process.env.OPENAI_REASONING_EFFORT || (isGpt5 ? "minimal" : "low");
     const modelParams: Record<string, unknown> = isReasoningModel
-      ? { reasoning_effort: reasoningEffort, verbosity: "low" }
+      ? {
+          reasoning_effort:
+            !isGpt5 && reasoningEffort === "minimal" ? "low" : reasoningEffort,
+          ...(isGpt5 ? { verbosity: "low" } : {}),
+        }
       : { temperature: 0.2 };
     const collectedActions: ActionDescriptor[] = [];
 
     let reply = "";
     // Bounded tool loop.
     for (let iteration = 0; iteration < 6; iteration++) {
-      const completion = await openai.chat.completions.create({
-        model,
-        messages,
-        tools,
-        tool_choice: "auto",
-        ...modelParams,
-      } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
+      let completion;
+      try {
+        completion = await openai.chat.completions.create({
+          model,
+          messages,
+          tools,
+          tool_choice: "auto",
+          ...modelParams,
+        } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
+      } catch (err) {
+        // Never hard-fail the whole turn on a model/API error (bad param, rate
+        // limit, missing model entitlement, transient network). Persist a
+        // friendly reply so the user gets feedback and the conversation stays
+        // consistent (their message was already saved).
+        console.error("assistant model call failed:", err);
+        reply =
+          "Sorry — I hit a problem reaching the assistant service just now. Please try again in a moment.";
+        break;
+      }
       const choice = completion.choices[0]?.message;
       if (!choice) break;
 
@@ -831,6 +864,7 @@ async function dispatchTool(
         const url = buildDeepLink({
           kind: a.type,
           title: a.title,
+          query: a.searchQuery,
           url: a.url,
           city: a.city,
         });

@@ -256,6 +256,7 @@ export const createRemoteEvent = internalAction({
     if (refreshed?.accessToken && conn.tokenSource !== "clerk") {
       await ctx.runMutation(internal.calendarConnections.updateAccessToken, {
         workspaceId: args.workspaceId,
+        userId: conn.userId,
         accessToken: refreshed.accessToken,
         expiresAt: refreshed.expiresAt,
       });
@@ -345,6 +346,7 @@ export const syncItem = internalAction({
       if (refreshed?.accessToken && conn.tokenSource !== "clerk") {
         await ctx.runMutation(internal.calendarConnections.updateAccessToken, {
           workspaceId: args.workspaceId,
+          userId: conn.userId,
           accessToken: refreshed.accessToken,
           expiresAt: refreshed.expiresAt,
         });
@@ -353,6 +355,7 @@ export const syncItem = internalAction({
     } catch (err) {
       await ctx.runMutation(internal.calendarConnections.recordFailure, {
         workspaceId: args.workspaceId,
+        userId: conn.userId,
         error: err instanceof Error ? err.message : String(err),
       });
       return { synced: false };
@@ -413,6 +416,7 @@ export const listGoogleEvents = action({
       const msg = err instanceof Error ? err.message : String(err);
       await ctx.runMutation(internal.calendarConnections.recordFailure, {
         workspaceId: args.workspaceId,
+        userId: me.clerkUserId,
         error: msg,
       });
       return { connected: true, events: [], error: msg };

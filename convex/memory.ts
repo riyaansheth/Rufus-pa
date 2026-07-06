@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireIdentity } from "./lib/auth";
+import { requireIdentity, requireWorkspaceAccess } from "./lib/auth";
 
 /**
  * Personal assistant memory: durable facts about the USER (not workspace data),
@@ -38,6 +38,8 @@ export const add = mutation({
   },
   handler: async (ctx, { content, workspaceId }) => {
     const identity = await requireIdentity(ctx);
+    // If a capture context is supplied, the caller must actually belong to it.
+    if (workspaceId) await requireWorkspaceAccess(ctx, workspaceId);
     const text = content.trim();
     if (!text) throw new Error("Nothing to remember.");
     // Skip if we already store an identical fact.

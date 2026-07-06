@@ -15,6 +15,8 @@ export type AuditAction =
   | "reminder.updated"
   | "reminder.triggered"
   | "calendar.event_created"
+  | "calendar.event_updated"
+  | "calendar.event_deleted"
   | "monitor.created"
   | "monitor.updated"
   | "monitor.deleted"
