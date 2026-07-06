@@ -2,8 +2,8 @@
 
 import { google } from "googleapis";
 import { v } from "convex/values";
-import { internalAction } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { action, internalAction } from "./_generated/server";
+import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import type {
   CalendarEventInput,
@@ -351,6 +351,57 @@ export const syncItem = internalAction({
         error: err instanceof Error ? err.message : String(err),
       });
       return { synced: false };
+    }
+  },
+});
+
+/**
+ * PUBLIC action: the signed-in user's upcoming Google Calendar events for a
+ * workspace (read-only; used by the Calendar page to show the real Google
+ * calendar alongside internal events). Returns no tokens — event data only.
+ */
+export const listGoogleEvents = action({
+  args: { workspaceId: v.id("workspaces"), maxResults: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    connected: boolean;
+    events: Array<{
+      externalId: string;
+      title?: string;
+      start?: string;
+      end?: string;
+      htmlLink?: string;
+    }>;
+    error?: string;
+  }> => {
+    // Verify workspace membership (throws if not a member).
+    await ctx.runQuery(api.memberships.myRole, { workspaceId: args.workspaceId });
+    const me = await ctx.runQuery(api.users.me, {});
+    if (!me?.clerkUserId) throw new Error("Unauthenticated.");
+
+    const conn = await ctx.runQuery(
+      internal.calendarConnections.getConnectionInternal,
+      { workspaceId: args.workspaceId, userId: me.clerkUserId },
+    );
+    if (!conn || conn.provider !== "google" || conn.status !== "connected") {
+      return { connected: false, events: [] };
+    }
+    const tokens = await resolveTokens(conn);
+    if (!tokens) return { connected: false, events: [] };
+    try {
+      const events = await provider.listUpcoming(tokens, {
+        maxResults: Math.min(args.maxResults ?? 30, 100),
+      });
+      return { connected: true, events };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await ctx.runMutation(internal.calendarConnections.recordFailure, {
+        workspaceId: args.workspaceId,
+        error: msg,
+      });
+      return { connected: true, events: [], error: msg };
     }
   },
 });

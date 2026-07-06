@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
-import { Calendar, Plus, Loader2, Trash2 } from "lucide-react";
+import { Calendar, Plus, Loader2, Trash2, ExternalLink, RefreshCw } from "lucide-react";
 import { PageHeader, EmptyState, RequireWorkspace } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -24,14 +24,59 @@ export default function CalendarPage() {
   );
 }
 
+type GoogleEvent = {
+  externalId: string;
+  title?: string;
+  start?: string;
+  end?: string;
+  htmlLink?: string;
+};
+
 function CalendarView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   const [open, setOpen] = React.useState(false);
   const events = useQuery(api.calendar.listUpcoming, { workspaceId, limit: 50 });
   const connections = useQuery(api.calendarConnections.status, { workspaceId });
   const removeEvent = useMutation(api.calendar.remove);
+  const listGoogle = useAction(api.googleCalendar.listGoogleEvents);
   const { toast } = useToast();
   const googleConnected = connections?.some(
     (c) => c.provider === "google" && c.status === "connected",
+  );
+
+  // Live Google Calendar events (actions aren't reactive — fetched on load/refresh).
+  const [googleEvents, setGoogleEvents] = React.useState<GoogleEvent[] | null>(
+    null,
+  );
+  const [googleLoading, setGoogleLoading] = React.useState(false);
+  const refreshGoogle = React.useCallback(async () => {
+    setGoogleLoading(true);
+    try {
+      const res = await listGoogle({ workspaceId, maxResults: 30 });
+      setGoogleEvents(res.events);
+      if (res.error) {
+        toast({
+          title: "Google Calendar fetch failed",
+          description: res.error,
+          variant: "error",
+        });
+      }
+    } catch {
+      // non-fatal; internal calendar still shows
+    } finally {
+      setGoogleLoading(false);
+    }
+  }, [listGoogle, workspaceId, toast]);
+
+  React.useEffect(() => {
+    if (googleConnected) void refreshGoogle();
+  }, [googleConnected, refreshGoogle]);
+
+  // Google events not already mirrored as internal rows (avoid duplicates).
+  const internalExternalIds = new Set(
+    (events ?? []).map((e) => e.externalId).filter(Boolean),
+  );
+  const googleOnly = (googleEvents ?? []).filter(
+    (g) => g.externalId && !internalExternalIds.has(g.externalId),
   );
 
   return (
@@ -130,6 +175,90 @@ function CalendarView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
           ))}
         </div>
       )}
+
+      {googleConnected ? (
+        <div className="mt-8">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-medium text-muted-foreground">
+              From your Google Calendar
+            </h2>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void refreshGoogle()}
+              disabled={googleLoading}
+            >
+              {googleLoading ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <RefreshCw />
+              )}
+              Refresh
+            </Button>
+          </div>
+          {googleEvents === null ? (
+            <div className="space-y-2">
+              {Array.from({ length: 2 }).map((_, i) => (
+                <Skeleton key={i} className="h-14 w-full" />
+              ))}
+            </div>
+          ) : googleOnly.length === 0 ? (
+            <p className="rounded-xl border border-dashed py-6 text-center text-sm text-muted-foreground">
+              No other upcoming events in your Google Calendar.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {googleOnly.map((g) => {
+                const startMs = g.start ? Date.parse(g.start) : NaN;
+                const endMs = g.end ? Date.parse(g.end) : NaN;
+                return (
+                  <Card key={g.externalId}>
+                    <CardContent className="flex items-center gap-3 py-3.5">
+                      <div className="flex size-10 shrink-0 flex-col items-center justify-center rounded-md border text-center">
+                        <span className="text-[10px] uppercase text-muted-foreground">
+                          {Number.isNaN(startMs)
+                            ? "—"
+                            : new Date(startMs).toLocaleString(undefined, {
+                                month: "short",
+                              })}
+                        </span>
+                        <span className="text-sm font-semibold leading-none">
+                          {Number.isNaN(startMs)
+                            ? ""
+                            : new Date(startMs).getDate()}
+                        </span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium">
+                          {g.title ?? "(no title)"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {Number.isNaN(startMs) ? "—" : formatDateTime(startMs)}
+                          {!Number.isNaN(endMs)
+                            ? ` – ${formatDateTime(endMs)}`
+                            : ""}
+                        </p>
+                      </div>
+                      <Badge variant="info">google</Badge>
+                      {g.htmlLink ? (
+                        <a
+                          href={g.htmlLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-muted-foreground hover:text-foreground"
+                          aria-label="Open in Google Calendar"
+                        >
+                          <ExternalLink className="size-4" />
+                        </a>
+                      ) : null}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : null}
 
       <NewEventDialog
         open={open}

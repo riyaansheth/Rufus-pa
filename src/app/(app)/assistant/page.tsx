@@ -183,6 +183,26 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages]);
 
+  // Retire the optimistic bubble once the persisted copy is in the live query.
+  React.useEffect(() => {
+    if (!pendingUserMessage || !messages) return;
+    if (
+      messages.some(
+        (m) => m.role === "user" && m.content === pendingUserMessage,
+      )
+    ) {
+      setPendingUserMessage(null);
+    }
+  }, [messages, pendingUserMessage]);
+
+  // Never render the optimistic bubble alongside its persisted twin (the query
+  // can deliver the message one frame before the effect above clears it).
+  const showPendingBubble =
+    pendingUserMessage !== null &&
+    !(messages ?? []).some(
+      (m) => m.role === "user" && m.content === pendingUserMessage,
+    );
+
   async function handleSend(text: string) {
     const content = text.trim();
     if (!content || sending) return;
@@ -208,9 +228,12 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         variant: "error",
       });
       setInput(content);
+      setPendingUserMessage(null); // failed → restore input, drop the bubble
     } finally {
       setSending(false);
-      setPendingUserMessage(null);
+      // On success the pending bubble is NOT cleared here — it stays until the
+      // persisted message arrives in the live query (see effect below), so the
+      // chat never flashes blank while the new conversation's query loads.
     }
     if (reply && (speakRepliesRef.current || voiceModeRef.current)) {
       await speak(reply);
@@ -291,9 +314,9 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
           ) : (
             <>
               {messages?.map((m) => <MessageBubble key={m._id} message={m} />)}
-              {pendingUserMessage ? (
+              {showPendingBubble ? (
                 <MessageBubble
-                  message={{ role: "user", content: pendingUserMessage }}
+                  message={{ role: "user", content: pendingUserMessage! }}
                 />
               ) : null}
             </>
