@@ -94,6 +94,13 @@ don't change. Placeholders (`Microsoft*`, `Browserbase*`, `Browserless*`) show t
 - Multi-user: workspaces have an `inviteCode`; teammates join via Settings → invite code
   (`workspaces.join`). Owners/admins then assign roles. This is what makes the approver flow
   testable with more than one person.
+- Google Calendar connects two ways: (a) manual OAuth (`/api/integrations/google/start`,
+  tokens stored in `calendarConnections`, `tokenSource: "oauth"`), or (b) **automatically via
+  Google sign-in** (`tokenSource: "clerk"` — no tokens at rest; `googleCalendar.ts` fetches a
+  fresh token from Clerk's API per sync; requires `CLERK_SECRET_KEY` on the Convex deployment
+  and the Clerk Google SSO connection configured with custom credentials + the
+  `calendar.events` scope). Auto-connect fires from `google-auto-connect.tsx` →
+  `/api/integrations/google/auto`, which verifies the scope before registering.
 
 <!-- convex-ai-start -->
 

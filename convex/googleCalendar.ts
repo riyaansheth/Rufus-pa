@@ -160,6 +160,58 @@ export class GoogleCalendarProvider implements CalendarProvider {
 const provider = new GoogleCalendarProvider();
 
 /**
+ * Fresh Google access token for a user who signed in with Google via Clerk.
+ * Clerk stores + auto-refreshes the social-login OAuth token; we fetch it on
+ * demand so NO Google tokens ever rest in our database for this path.
+ * Requires CLERK_SECRET_KEY on the Convex deployment.
+ */
+async function fetchClerkGoogleToken(
+  clerkUserId: string,
+): Promise<OAuthTokens | null> {
+  const secret = process.env.CLERK_SECRET_KEY;
+  if (!secret) return null;
+  try {
+    const res = await fetch(
+      `https://api.clerk.com/v1/users/${clerkUserId}/oauth_access_tokens/oauth_google`,
+      { headers: { Authorization: `Bearer ${secret}` } },
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as unknown;
+    const arr = Array.isArray(body)
+      ? body
+      : ((body as { data?: unknown[] })?.data ?? []);
+    const tok = arr[0] as
+      | { token?: string; expires_at?: number }
+      | undefined;
+    if (!tok?.token) return null;
+    return { accessToken: tok.token, expiresAt: tok.expires_at ?? undefined };
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve usable Google tokens for a connection, whatever its source. */
+async function resolveTokens(conn: {
+  tokenSource?: "oauth" | "clerk";
+  userId: string;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  scope?: string;
+}): Promise<OAuthTokens | null> {
+  if (conn.tokenSource === "clerk") {
+    return fetchClerkGoogleToken(conn.userId);
+  }
+  if (!conn.accessToken) return null;
+  return {
+    accessToken: conn.accessToken,
+    refreshToken: conn.refreshToken ?? undefined,
+    expiresAt: conn.expiresAt ?? undefined,
+    scope: conn.scope ?? undefined,
+  };
+}
+
+/**
  * INTERNAL action: create an event in the workspace's connected Google Calendar.
  * Loads tokens server-side; the caller (convex/calendar.ts createEvent) handles the
  * fallback to an internal-only event when this is unavailable or fails.
@@ -180,8 +232,12 @@ export const createRemoteEvent = internalAction({
       internal.calendarConnections.getConnectionInternal,
       { workspaceId: args.workspaceId, userId: args.userId },
     );
-    if (!conn || !conn.accessToken) {
+    if (!conn) {
       throw new Error("No connected Google Calendar for this workspace.");
+    }
+    const tokens = await resolveTokens(conn);
+    if (!tokens) {
+      throw new Error("No usable Google Calendar credentials for this workspace.");
     }
     const input: CalendarEventInput = {
       title: args.title,
@@ -191,17 +247,10 @@ export const createRemoteEvent = internalAction({
       location: args.location,
       attendees: args.attendees,
     };
-    const { event, refreshed } = await provider.createEvent(
-      {
-        accessToken: conn.accessToken,
-        refreshToken: conn.refreshToken ?? undefined,
-        expiresAt: conn.expiresAt ?? undefined,
-        scope: conn.scope ?? undefined,
-      },
-      input,
-    );
-    // Persist a refreshed access token so we don't re-refresh on every call.
-    if (refreshed?.accessToken) {
+    const { event, refreshed } = await provider.createEvent(tokens, input);
+    // Persist a refreshed access token so we don't re-refresh on every call
+    // (only relevant for stored-token connections; Clerk fetches fresh each time).
+    if (refreshed?.accessToken && conn.tokenSource !== "clerk") {
       await ctx.runMutation(internal.calendarConnections.updateAccessToken, {
         workspaceId: args.workspaceId,
         accessToken: refreshed.accessToken,
@@ -242,19 +291,11 @@ export const syncItem = internalAction({
       internal.calendarConnections.getConnectionInternal,
       { workspaceId: args.workspaceId, userId: args.userId },
     );
-    if (
-      !conn ||
-      conn.provider !== "google" ||
-      conn.status !== "connected" ||
-      !conn.accessToken
-    ) {
+    if (!conn || conn.provider !== "google" || conn.status !== "connected") {
       return { synced: false };
     }
-    const tokens: OAuthTokens = {
-      accessToken: conn.accessToken,
-      refreshToken: conn.refreshToken ?? undefined,
-      expiresAt: conn.expiresAt ?? undefined,
-    };
+    const tokens = await resolveTokens(conn);
+    if (!tokens) return { synced: false };
 
     try {
       let refreshed: { accessToken: string; expiresAt?: number } | undefined;
@@ -296,7 +337,7 @@ export const syncItem = internalAction({
         const res = await provider.deleteEvent(tokens, args.googleEventId);
         refreshed = res.refreshed;
       }
-      if (refreshed?.accessToken) {
+      if (refreshed?.accessToken && conn.tokenSource !== "clerk") {
         await ctx.runMutation(internal.calendarConnections.updateAccessToken, {
           workspaceId: args.workspaceId,
           accessToken: refreshed.accessToken,

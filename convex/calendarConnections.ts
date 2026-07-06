@@ -26,6 +26,7 @@ export const status = query({
       provider: c.provider,
       status: c.status,
       accountEmail: c.accountEmail,
+      tokenSource: c.tokenSource ?? "oauth",
       lastError: c.lastError,
       connectedAt: c.createdAt,
     }));
@@ -121,6 +122,66 @@ export const upsertGoogleConnection = mutation({
       entityType: "calendarConnection",
       metadata: { provider: "google", accountEmail: args.accountEmail },
     });
+  },
+});
+
+/**
+ * Auto-connect for users who signed in with Google via Clerk. No tokens are stored:
+ * the sync actions fetch a fresh access token from Clerk's API on demand (Clerk
+ * handles refresh). Called by /api/integrations/google/auto after verifying the
+ * user's Google sign-in actually granted the calendar scope. Idempotent.
+ */
+export const upsertClerkConnection = mutation({
+  args: {
+    workspaceId: v.id("workspaces"),
+    accountEmail: v.optional(v.string()),
+  },
+  handler: async (ctx, { workspaceId, accountEmail }) => {
+    const { identity } = await requireWorkspaceAccess(ctx, workspaceId);
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("calendarConnections")
+      .withIndex("by_workspace_user", (q) =>
+        q.eq("workspaceId", workspaceId).eq("userId", identity.clerkUserId),
+      )
+      .first();
+
+    if (existing) {
+      // Don't clobber a manually-connected OAuth account that's working.
+      if (existing.tokenSource !== "clerk" && existing.status === "connected") {
+        return { connected: true, via: existing.tokenSource ?? "oauth" };
+      }
+      await ctx.db.patch(existing._id, {
+        provider: "google",
+        tokenSource: "clerk",
+        accountEmail: accountEmail ?? existing.accountEmail,
+        accessToken: undefined,
+        refreshToken: undefined,
+        expiresAt: undefined,
+        status: "connected",
+        lastError: undefined,
+        updatedAt: now,
+      });
+    } else {
+      await ctx.db.insert("calendarConnections", {
+        workspaceId,
+        userId: identity.clerkUserId,
+        provider: "google",
+        tokenSource: "clerk",
+        accountEmail,
+        status: "connected",
+        createdAt: now,
+        updatedAt: now,
+      });
+      await writeAuditLog(ctx, {
+        workspaceId,
+        actorUserId: identity.clerkUserId,
+        action: "integration.connected",
+        entityType: "calendarConnection",
+        metadata: { provider: "google", via: "clerk_sign_in", accountEmail },
+      });
+    }
+    return { connected: true, via: "clerk" };
   },
 });
 

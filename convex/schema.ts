@@ -157,6 +157,11 @@ export default defineSchema({
     userId: v.string(), // clerkUserId who connected the account
     provider: calendarProviderValidator,
     accountEmail: v.optional(v.string()),
+    // How tokens are obtained:
+    //  - "oauth": we stored access/refresh tokens from our own OAuth flow.
+    //  - "clerk": the user signed in with Google via Clerk; we fetch a fresh
+    //    access token from Clerk's API on demand (no tokens at rest here).
+    tokenSource: v.optional(v.union(v.literal("oauth"), v.literal("clerk"))),
     // NOTE: tokens are stored server-side only and never returned to the client.
     // TODO(production): encrypt these fields at rest with a KMS-managed key.
     accessToken: v.optional(v.string()),

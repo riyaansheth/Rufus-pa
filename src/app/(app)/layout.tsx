@@ -8,6 +8,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { NotificationBell } from "@/components/notification-bell";
 import { QuickCapture } from "@/components/quick-capture";
+import { GoogleAutoConnect } from "@/components/google-auto-connect";
 import { UserSync } from "@/components/user-sync";
 import { OnboardingCard } from "@/components/onboarding-card";
 
@@ -16,6 +17,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <>
       <UserSync />
       <WorkspaceProvider>
+        <GoogleAutoConnect />
         <Shell>{children}</Shell>
       </WorkspaceProvider>
     </>

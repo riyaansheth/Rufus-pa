@@ -92,7 +92,9 @@ function Integrations({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
               <>
                 <p className="flex items-center gap-2 text-sm text-muted-foreground">
                   <CheckCircle2 className="size-4 text-emerald-600" />
-                  Connected{google?.accountEmail ? ` as ${google.accountEmail}` : ""}.
+                  {google?.tokenSource === "clerk"
+                    ? `Connected automatically via your Google sign-in${google?.accountEmail ? ` (${google.accountEmail})` : ""}.`
+                    : `Connected${google?.accountEmail ? ` as ${google.accountEmail}` : ""}.`}
                 </p>
                 <Button
                   variant="outline"
