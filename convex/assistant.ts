@@ -36,6 +36,8 @@ MEMORY: You remember the user across conversations. Their profile (name, locatio
 
 REAL-TIME KNOWLEDGE: You have LIVE web access via the webSearch tool. You are not limited to training data. Whenever a question depends on current, recent, or real-world facts — news, prices, weather, sports scores, stock/crypto quotes, product availability, schedules, "who/what/when is…", flight/travel info, anything that could have changed after your training cut-off, or anything you're not fully certain about — call webSearch FIRST and answer from the fresh results. Prefer searching over guessing. You can answer questions on ANY topic in the world this way. When you use search results, weave in the key facts and, when helpful, mention the source. Do not claim you lack internet access or real-time data — you have both.
 
+CRITICAL: For anything about what is CURRENT/happening NOW — movies now showing or in cinemas, this week's releases, latest news, today's weather, current prices, live scores, what's trending, what's available — you MUST call webSearch first and answer ONLY from those results. NEVER list current movies, showtimes, news, prices, or "what's out now" from memory: your training data is stale and will be wrong. If you're about to answer a "now/currently/latest/today" question without having searched, stop and search first.
+
 CRITICAL SAFETY RULES — never violate these:
 - You are a SUPERVISED assistant, not an auto-purchase bot.
 - You NEVER complete a payment, checkout, booking, or enter/read an OTP, UPI PIN, CVV, or password. If asked, explain that the human must complete the final payment/OTP/booking step themselves.
@@ -568,6 +570,36 @@ async function runWebSearch(
 }
 
 /**
+ * Should this message be forced to hit the live web? True for informational
+ * questions about current/real-world facts (movies now showing, news, weather,
+ * prices, scores…). We force webSearch on these because GPT-5 at minimal
+ * reasoning otherwise answers from stale training data. Excludes action commands
+ * ("book/create/remind…"), which are not lookups.
+ */
+function needsRealtime(text: string): boolean {
+  const t = text.toLowerCase();
+  const isAction =
+    /\b(create|add|remind|schedule|book|track|monitor|delete|cancel|move|reschedule|rename|mark|complete|set up|make (a|an|me a))\b/.test(
+      t,
+    );
+  if (isAction) return false;
+  const isQuestion =
+    /\?/.test(t) ||
+    /\b(what|which|who|whom|when|where|how|is|are|was|were|does|do|did|any|show me|tell me|list|find|recommend|suggest)\b/.test(
+      t,
+    );
+  const current =
+    /\b(now|rn|right now|currently|today|tonight|latest|current|recent|these days|at the moment|nowadays)\b/.test(
+      t,
+    ) || /\bthis (week|weekend|month|year|evening)\b/.test(t);
+  const realworld =
+    /\b(movie|movies|cinema|cinemas|theatre|theater|showing|playing|release|released|releasing|news|headline|weather|forecast|price|prices|cost|stock|crypto|score|scores|match|fixture|trending|showtime|showtimes|box office|winner|won|happening|events?)\b/.test(
+      t,
+    );
+  return isQuestion && (current || realworld);
+}
+
+/**
  * Server-side "does the user want this booked/opened RIGHT NOW?" check — mirrors
  * the client heuristic. Used to auto-open a booking URL even when the model chose
  * a different tool than openBookingLink.
@@ -774,16 +806,24 @@ export const sendMessage = action({
     // "book now" opens the page even if the model reached for a different tool.
     const collectedBookingUrls: string[] = [];
 
+    // Force a live web search on the FIRST turn for "what's current" questions,
+    // so real-time answers can't come from stale training data.
+    const forceSearchFirst = needsRealtime(args.content);
+
     let reply = "";
     // Bounded tool loop.
     for (let iteration = 0; iteration < 6; iteration++) {
+      const toolChoice =
+        iteration === 0 && forceSearchFirst
+          ? { type: "function" as const, function: { name: "webSearch" } }
+          : "auto";
       let completion;
       try {
         completion = await openai.chat.completions.create({
           model,
           messages,
           tools,
-          tool_choice: "auto",
+          tool_choice: toolChoice,
           ...modelParams,
         } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
       } catch (err) {
