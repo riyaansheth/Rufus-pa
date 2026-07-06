@@ -24,21 +24,15 @@ export async function scheduleGoogleSync(
     writeBack?: { table: "tasks" | "reminders"; id: string };
   },
 ): Promise<void> {
-  // Prefer the acting user's own connection; fall back to any in the workspace.
-  let conn = args.userId
-    ? await ctx.db
-        .query("calendarConnections")
-        .withIndex("by_workspace_user", (q) =>
-          q.eq("workspaceId", args.workspaceId).eq("userId", args.userId!),
-        )
-        .first()
-    : null;
-  if (!conn) {
-    conn = await ctx.db
-      .query("calendarConnections")
-      .withIndex("by_workspace", (q) => q.eq("workspaceId", args.workspaceId))
-      .first();
-  }
+  // STRICTLY the acting user's own connection — a member's items must never
+  // sync into a teammate's Google Calendar.
+  if (!args.userId) return;
+  const conn = await ctx.db
+    .query("calendarConnections")
+    .withIndex("by_workspace_user", (q) =>
+      q.eq("workspaceId", args.workspaceId).eq("userId", args.userId!),
+    )
+    .first();
   if (!conn || conn.provider !== "google" || conn.status !== "connected") {
     return;
   }

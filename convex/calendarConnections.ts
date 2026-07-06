@@ -44,16 +44,16 @@ export const getConnectionInternal = internalQuery({
     userId: v.optional(v.string()),
   },
   handler: async (ctx, { workspaceId, userId }) => {
-    // Prefer the acting user's own connection (each member connects their own
-    // Google account); fall back to any workspace connection.
+    // STRICTLY the acting user's own connection. No fallback to teammates'
+    // connections: personal calendars are personal — another member's items must
+    // never sync into (or read from) your Google account.
     if (userId) {
-      const own = await ctx.db
+      return ctx.db
         .query("calendarConnections")
         .withIndex("by_workspace_user", (q) =>
           q.eq("workspaceId", workspaceId).eq("userId", userId),
         )
         .first();
-      if (own) return own;
     }
     return ctx.db
       .query("calendarConnections")
