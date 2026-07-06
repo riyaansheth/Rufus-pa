@@ -78,6 +78,12 @@ export default defineSchema({
     email: v.optional(v.string()),
     name: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    // IANA timezone captured from the browser; used for the daily briefing hour.
+    timezone: v.optional(v.string()),
+    // Proactive daily-briefing preferences (in-app notification each morning).
+    briefingEnabled: v.optional(v.boolean()),
+    briefingHour: v.optional(v.number()), // local hour 0-23, default 8
+    lastBriefingSentAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_clerkUser", ["clerkUserId"]),

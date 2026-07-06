@@ -10,6 +10,7 @@ import { writeAuditLog, notify } from "./lib/audit";
 import { insertApprovalRequest } from "./approvals";
 import { ManualMonitorProvider } from "./integrations/manualMonitor";
 import type { MonitorConditions } from "./integrations/automationProvider";
+import { currentHourInTz, todayWindowInTz } from "./lib/time";
 
 /**
  * System cron handlers. These run without a user identity, so they operate across
@@ -154,5 +155,121 @@ export const runMonitorChecks = internalAction({
       });
     }
     return { checked: due.length };
+  },
+});
+
+// --- Daily briefing ----------------------------------------------------------
+
+/**
+ * Proactive morning briefing. Runs every 30 minutes; for each user who opted in
+ * (Settings), when their LOCAL clock reaches their chosen hour we send one in-app
+ * notification per workspace summarizing today: tasks due, reminders, events, and
+ * pending approvals. Deduped per local day via `lastBriefingSentAt`.
+ */
+export const sendDailyBriefings = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const users = await ctx.db.query("users").collect();
+    let sent = 0;
+
+    for (const user of users) {
+      if (!user.briefingEnabled) continue;
+      const tz = user.timezone ?? "UTC";
+      const targetHour = user.briefingHour ?? 8;
+      if (currentHourInTz(tz) !== targetHour) continue;
+
+      const { dayStartMs, dayEndMs } = todayWindowInTz(tz);
+      // Already briefed today (in the user's local day)? Skip.
+      if (user.lastBriefingSentAt && user.lastBriefingSentAt >= dayStartMs) {
+        continue;
+      }
+
+      const memberships = await ctx.db
+        .query("memberships")
+        .withIndex("by_user", (q) => q.eq("userId", user.clerkUserId))
+        .collect();
+      if (memberships.length === 0) continue;
+
+      let anySent = false;
+      for (const m of memberships) {
+        const [tasks, events, approvals, reminders] = [
+          await ctx.db
+            .query("tasks")
+            .withIndex("by_workspace", (q) => q.eq("workspaceId", m.workspaceId))
+            .collect(),
+          await ctx.db
+            .query("calendarEvents")
+            .withIndex("by_workspace_start", (q) =>
+              q
+                .eq("workspaceId", m.workspaceId)
+                .gte("startAt", dayStartMs)
+                .lte("startAt", dayEndMs),
+            )
+            .collect(),
+          await ctx.db
+            .query("approvalRequests")
+            .withIndex("by_workspace_status", (q) =>
+              q.eq("workspaceId", m.workspaceId).eq("status", "pending"),
+            )
+            .collect(),
+          await ctx.db
+            .query("reminders")
+            .withIndex("by_workspace_status", (q) =>
+              q.eq("workspaceId", m.workspaceId).eq("status", "scheduled"),
+            )
+            .collect(),
+        ];
+        const tasksToday = tasks.filter(
+          (t) =>
+            t.status !== "done" &&
+            t.status !== "cancelled" &&
+            t.dueAt !== undefined &&
+            t.dueAt >= dayStartMs &&
+            t.dueAt <= dayEndMs,
+        ).length;
+        const remindersToday = reminders.filter(
+          (r) => r.remindAt >= dayStartMs && r.remindAt <= dayEndMs,
+        ).length;
+        const eventsToday = events.length;
+        const pendingApprovals = approvals.length;
+
+        if (
+          tasksToday + remindersToday + eventsToday + pendingApprovals ===
+          0
+        ) {
+          continue; // nothing to report for this workspace
+        }
+        const parts: string[] = [];
+        if (tasksToday) parts.push(`${tasksToday} task${tasksToday > 1 ? "s" : ""} due`);
+        if (eventsToday) parts.push(`${eventsToday} event${eventsToday > 1 ? "s" : ""}`);
+        if (remindersToday) parts.push(`${remindersToday} reminder${remindersToday > 1 ? "s" : ""}`);
+        if (pendingApprovals) parts.push(`${pendingApprovals} approval${pendingApprovals > 1 ? "s" : ""} waiting`);
+        await notify(ctx, {
+          workspaceId: m.workspaceId,
+          userId: user.clerkUserId,
+          title: "Your day at a glance",
+          message: parts.join(" · "),
+          type: "daily_briefing",
+          href: "/dashboard",
+        });
+        anySent = true;
+      }
+
+      if (!anySent) {
+        // Everything is clear — still say good morning once, in the first workspace.
+        await notify(ctx, {
+          workspaceId: memberships[0].workspaceId,
+          userId: user.clerkUserId,
+          title: "Your day at a glance",
+          message: "All clear today — nothing due, no approvals waiting.",
+          type: "daily_briefing",
+          href: "/dashboard",
+        });
+      }
+      await ctx.db.patch(user._id, { lastBriefingSentAt: now });
+      sent++;
+    }
+    return { sent };
   },
 });

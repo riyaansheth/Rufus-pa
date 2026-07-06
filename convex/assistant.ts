@@ -8,6 +8,7 @@ import { z } from "zod";
 import { action, ActionCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { toMs, todayWindowInTz } from "./lib/time";
 
 /**
  * The AI assistant.
@@ -22,6 +23,8 @@ const SYSTEM_PROMPT = `You are Rufuspa, a careful, professional AI executive ass
 
 You can: schedule calendar events, create reminders, create and track tasks, set up availability monitors (for products, movie tickets, events, or URLs), prepare purchase/booking approval requests, and answer questions about the user's day.
 
+You can also MANAGE existing items by name via the manage* tools: complete/reopen/cancel/delete/update tasks, cancel/reschedule reminders, delete/reschedule/rename calendar events, and pause/resume/delete monitors. Users refer to items loosely ("mark the vendor call as done") — pass their words as titleQuery. If the tool returns candidates, ask the user which one they meant; never guess between multiple matches. You cannot approve or reject approval requests — a human must decide those on the Approvals page; offer to point them there.
+
 CRITICAL SAFETY RULES — never violate these:
 - You are a SUPERVISED assistant, not an auto-purchase bot.
 - You NEVER complete a payment, checkout, booking, or enter/read an OTP, UPI PIN, CVV, or password. If asked, explain that the human must complete the final payment/OTP/booking step themselves.
@@ -34,106 +37,11 @@ When a request maps to a tool, call it. After acting, briefly confirm what you d
 - "I created a monitor. If the condition is met, I'll create a purchase request for approval. I won't complete payment or OTP steps."
 - "Bookings tracking is set. When bookings open, I'll notify you and prepare an approval request. Final booking and payment must be completed by you."
 
-Time handling: interpret relative times against the provided current time and express any date/time arguments as ISO 8601 strings (e.g. 2026-07-02T17:00:00). Assume 1-hour duration for meetings unless told otherwise.`;
+Time handling: interpret relative times against the provided current time and express any date/time arguments as ISO 8601 strings (e.g. 2026-07-02T17:00:00). Assume 1-hour duration for meetings unless told otherwise.
 
-/**
- * Minutes east of UTC for `tz` at a given instant (handles DST correctly by
- * asking Intl what the wall-clock reads there).
- */
-function tzOffsetMinutes(tz: string, atUtcMs: number): number {
-  try {
-    const dtf = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      hourCycle: "h23",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-    const p = dtf.formatToParts(new Date(atUtcMs)).reduce<Record<string, string>>(
-      (acc, part) => {
-        acc[part.type] = part.value;
-        return acc;
-      },
-      {},
-    );
-    const asUTC = Date.UTC(
-      +p.year,
-      +p.month - 1,
-      +p.day,
-      +p.hour,
-      +p.minute,
-      +p.second,
-    );
-    return Math.round((asUTC - atUtcMs) / 60000);
-  } catch {
-    return 0;
-  }
-}
+Style: your replies may be read aloud by text-to-speech. Lead with ONE short spoken-friendly confirmation sentence (no markdown, no lists in that first sentence). Add details after it only when genuinely useful.`;
 
-/** Start/end epoch (ms) of "today" as seen in the user's timezone `tz`. */
-function todayWindowInTz(tz: string): { dayStartMs: number; dayEndMs: number } {
-  const nowMs = Date.now();
-  let y: number, m: number, d: number;
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    })
-      .formatToParts(new Date(nowMs))
-      .reduce<Record<string, string>>((acc, p) => {
-        acc[p.type] = p.value;
-        return acc;
-      }, {});
-    y = +parts.year;
-    m = +parts.month;
-    d = +parts.day;
-  } catch {
-    const now = new Date(nowMs);
-    y = now.getUTCFullYear();
-    m = now.getUTCMonth() + 1;
-    d = now.getUTCDate();
-  }
-  const startUtcGuess = Date.UTC(y, m - 1, d, 0, 0, 0);
-  const offsetMin = tzOffsetMinutes(tz, startUtcGuess);
-  const dayStartMs = startUtcGuess - offsetMin * 60000;
-  return { dayStartMs, dayEndMs: dayStartMs + 24 * 60 * 60 * 1000 - 1 };
-}
-
-/**
- * Parse a datetime the assistant produced into an epoch (ms).
- *
- * If the string already carries a timezone offset (or "Z"), it is unambiguous and
- * parsed directly. If it is a *naive* wall-clock string (no offset), we interpret it
- * in the user's timezone `tz` — NOT the server's UTC — which is the whole point of
- * the timezone fix. Without this, "4 PM" from an IST user would land at 4 PM UTC.
- */
-function toMs(
-  value?: string | number | null,
-  tz?: string,
-): number | undefined {
-  if (value === undefined || value === null || value === "") return undefined;
-  if (typeof value === "number") return value;
-
-  const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value.trim());
-  if (hasOffset || !tz) {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  }
-
-  // Naive wall-clock in `tz`: treat as UTC, then subtract the zone offset.
-  const asUtc = Date.parse(value.endsWith("Z") ? value : value + "Z");
-  if (Number.isNaN(asUtc)) {
-    const fallback = Date.parse(value);
-    return Number.isNaN(fallback) ? undefined : fallback;
-  }
-  const offsetMin = tzOffsetMinutes(tz, asUtc);
-  return asUtc - offsetMin * 60000;
-}
+// Timezone parsing/window helpers live in lib/time.ts (shared with the briefing cron).
 
 // --- Tool schemas (surfaced to OpenAI) ------------------------------------
 
@@ -277,6 +185,90 @@ const tools: ChatCompletionTool[] = [
       parameters: { type: "object", properties: {} },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "listUpcomingEvents",
+      description: "List upcoming calendar events.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "manageTask",
+      description:
+        "Complete, reopen, cancel, delete, or update an existing task found by (partial) title. If several tasks match, the result lists candidates — ask the user which one.",
+      parameters: {
+        type: "object",
+        properties: {
+          titleQuery: { type: "string", description: "Part of the task title" },
+          action: {
+            type: "string",
+            enum: ["complete", "reopen", "cancel", "delete", "update"],
+          },
+          dueAt: { type: "string", description: "ISO 8601 (for update)" },
+          priority: { type: "string", enum: ["low", "medium", "high"] },
+        },
+        required: ["titleQuery", "action"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "manageReminder",
+      description:
+        "Cancel or reschedule an existing reminder found by (partial) title.",
+      parameters: {
+        type: "object",
+        properties: {
+          titleQuery: { type: "string" },
+          action: { type: "string", enum: ["cancel", "reschedule"] },
+          remindAt: {
+            type: "string",
+            description: "ISO 8601 new time (required for reschedule)",
+          },
+        },
+        required: ["titleQuery", "action"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "manageCalendarEvent",
+      description:
+        "Delete, reschedule, or rename an existing calendar event found by (partial) title. Rescheduling only updates the internal calendar; if the event was mirrored to Google, tell the user to adjust it there too.",
+      parameters: {
+        type: "object",
+        properties: {
+          titleQuery: { type: "string" },
+          action: { type: "string", enum: ["delete", "reschedule", "rename"] },
+          startAt: { type: "string", description: "ISO 8601 new start" },
+          endAt: { type: "string", description: "ISO 8601 new end (optional; defaults to +1h from start)" },
+          newTitle: { type: "string" },
+        },
+        required: ["titleQuery", "action"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "manageMonitor",
+      description:
+        "Pause, resume, or delete an existing availability monitor found by (partial) title.",
+      parameters: {
+        type: "object",
+        properties: {
+          titleQuery: { type: "string" },
+          action: { type: "string", enum: ["pause", "resume", "delete"] },
+        },
+        required: ["titleQuery", "action"],
+      },
+    },
+  },
 ];
 
 type ActionDescriptor = {
@@ -326,7 +318,57 @@ const schemas = {
       .enum(["purchase_request", "ticket_booking_request"])
       .optional(),
   }),
+  manageTask: z.object({
+    titleQuery: z.string().min(1),
+    action: z.enum(["complete", "reopen", "cancel", "delete", "update"]),
+    dueAt: z.string().optional(),
+    priority: z.enum(["low", "medium", "high"]).optional(),
+  }),
+  manageReminder: z.object({
+    titleQuery: z.string().min(1),
+    action: z.enum(["cancel", "reschedule"]),
+    remindAt: z.string().optional(),
+  }),
+  manageCalendarEvent: z.object({
+    titleQuery: z.string().min(1),
+    action: z.enum(["delete", "reschedule", "rename"]),
+    startAt: z.string().optional(),
+    endAt: z.string().optional(),
+    newTitle: z.string().optional(),
+  }),
+  manageMonitor: z.object({
+    titleQuery: z.string().min(1),
+    action: z.enum(["pause", "resume", "delete"]),
+  }),
 };
+
+/**
+ * Find one record by (partial) title. Exact match wins; otherwise case-insensitive
+ * substring. Exactly one hit → act on it. Zero or several → return them so the model
+ * can ask the user to disambiguate instead of guessing.
+ */
+function resolveByTitle<T extends { title: string }>(
+  rows: T[],
+  query: string,
+): { match: T } | { candidates: T[] } {
+  const q = query.trim().toLowerCase();
+  const exact = rows.filter((r) => r.title.trim().toLowerCase() === q);
+  if (exact.length === 1) return { match: exact[0] };
+  const partial = rows.filter((r) => r.title.toLowerCase().includes(q));
+  if (partial.length === 1) return { match: partial[0] };
+  return { candidates: partial.slice(0, 8) };
+}
+
+/** Uniform "couldn't resolve" tool output the model can act on. */
+function ambiguousOutput(kind: string, query: string, candidates: { title: string }[]) {
+  if (candidates.length === 0) {
+    return { error: `No ${kind} found matching "${query}".` };
+  }
+  return {
+    error: `Multiple ${kind}s match "${query}" — ask the user which one.`,
+    candidates: candidates.map((c) => c.title),
+  };
+}
 
 export const sendMessage = action({
   args: {
@@ -663,6 +705,199 @@ async function dispatchTool(
       case "listReminders": {
         const rows = await ctx.runQuery(api.reminders.list, { workspaceId });
         return { output: { reminders: rows } };
+      }
+      case "listUpcomingEvents": {
+        const rows = await ctx.runQuery(api.calendar.listUpcoming, {
+          workspaceId,
+          limit: 20,
+        });
+        return { output: { events: rows } };
+      }
+      case "manageTask": {
+        const a = schemas.manageTask.parse(parsed);
+        const rows = await ctx.runQuery(api.tasks.list, { workspaceId });
+        // Deleting/completing "done" tasks is legal; scope open tasks first for
+        // friendlier matching, but fall back to all.
+        const open = rows.filter(
+          (t) => t.status !== "done" && t.status !== "cancelled",
+        );
+        let res = resolveByTitle(a.action === "reopen" ? rows : open, a.titleQuery);
+        if (!("match" in res)) {
+          const all = resolveByTitle(rows, a.titleQuery);
+          if ("match" in all) res = all;
+        }
+        if (!("match" in res)) {
+          return { output: ambiguousOutput("task", a.titleQuery, res.candidates) };
+        }
+        const task = res.match;
+        if (a.action === "delete") {
+          await ctx.runMutation(api.tasks.remove, { workspaceId, taskId: task._id });
+        } else {
+          const status =
+            a.action === "complete"
+              ? ("done" as const)
+              : a.action === "reopen"
+                ? ("todo" as const)
+                : a.action === "cancel"
+                  ? ("cancelled" as const)
+                  : undefined;
+          await ctx.runMutation(api.tasks.update, {
+            workspaceId,
+            taskId: task._id,
+            status,
+            priority: a.priority,
+            dueAt: toMs(a.dueAt, tz),
+          });
+        }
+        return {
+          output: { ok: true, task: task.title, action: a.action },
+          action: {
+            kind: "task_updated",
+            label: `Task ${a.action}d: ${task.title}`,
+            entityType: "task",
+            entityId: task._id,
+            href: "/tasks",
+          },
+        };
+      }
+      case "manageReminder": {
+        const a = schemas.manageReminder.parse(parsed);
+        const rows = await ctx.runQuery(api.reminders.list, { workspaceId });
+        const res = resolveByTitle(
+          rows.filter((r) => r.status === "scheduled"),
+          a.titleQuery,
+        );
+        if (!("match" in res)) {
+          return {
+            output: ambiguousOutput("reminder", a.titleQuery, res.candidates),
+          };
+        }
+        const reminder = res.match;
+        if (a.action === "cancel") {
+          await ctx.runMutation(api.reminders.cancel, {
+            workspaceId,
+            reminderId: reminder._id,
+          });
+        } else {
+          const remindAt = toMs(a.remindAt, tz);
+          if (!remindAt) {
+            return { output: { error: "Reschedule needs a valid remindAt time." } };
+          }
+          await ctx.runMutation(api.reminders.reschedule, {
+            workspaceId,
+            reminderId: reminder._id,
+            remindAt,
+          });
+        }
+        return {
+          output: { ok: true, reminder: reminder.title, action: a.action },
+          action: {
+            kind: "reminder_updated",
+            label: `Reminder ${a.action === "cancel" ? "cancelled" : "rescheduled"}: ${reminder.title}`,
+            entityType: "reminder",
+            entityId: reminder._id,
+            href: "/reminders",
+          },
+        };
+      }
+      case "manageCalendarEvent": {
+        const a = schemas.manageCalendarEvent.parse(parsed);
+        const rows = await ctx.runQuery(api.calendar.listUpcoming, {
+          workspaceId,
+          limit: 50,
+        });
+        const res = resolveByTitle(rows, a.titleQuery);
+        if (!("match" in res)) {
+          return { output: ambiguousOutput("event", a.titleQuery, res.candidates) };
+        }
+        const event = res.match;
+        if (a.action === "delete") {
+          await ctx.runMutation(api.calendar.remove, {
+            workspaceId,
+            eventId: event._id,
+          });
+          return {
+            output: {
+              ok: true,
+              event: event.title,
+              action: "delete",
+              note:
+                event.source === "google"
+                  ? "This event was mirrored to Google Calendar — tell the user to also remove it there."
+                  : undefined,
+            },
+            action: {
+              kind: "event_updated",
+              label: `Event deleted: ${event.title}`,
+              entityType: "calendarEvent",
+              href: "/calendar",
+            },
+          };
+        }
+        const startAt = toMs(a.startAt, tz);
+        if (a.action === "reschedule" && !startAt) {
+          return { output: { error: "Reschedule needs a valid startAt time." } };
+        }
+        const endAt =
+          toMs(a.endAt, tz) ??
+          (startAt ? startAt + (event.endAt - event.startAt) : undefined);
+        const result = await ctx.runMutation(api.calendar.updateInternal, {
+          workspaceId,
+          eventId: event._id,
+          title: a.action === "rename" ? a.newTitle : undefined,
+          startAt: a.action === "reschedule" ? startAt : undefined,
+          endAt: a.action === "reschedule" ? endAt : undefined,
+        });
+        return {
+          output: {
+            ok: true,
+            event: event.title,
+            action: a.action,
+            note: result.wasGoogleMirrored
+              ? "This event was mirrored to Google Calendar — the change applies to the internal calendar only; tell the user to update Google too."
+              : undefined,
+          },
+          action: {
+            kind: "event_updated",
+            label: `Event ${a.action}d: ${a.newTitle ?? event.title}`,
+            entityType: "calendarEvent",
+            entityId: event._id,
+            href: "/calendar",
+          },
+        };
+      }
+      case "manageMonitor": {
+        const a = schemas.manageMonitor.parse(parsed);
+        const rows = await ctx.runQuery(api.monitors.list, { workspaceId });
+        const res = resolveByTitle(rows, a.titleQuery);
+        if (!("match" in res)) {
+          return {
+            output: ambiguousOutput("monitor", a.titleQuery, res.candidates),
+          };
+        }
+        const monitor = res.match;
+        if (a.action === "delete") {
+          await ctx.runMutation(api.monitors.remove, {
+            workspaceId,
+            monitorId: monitor._id,
+          });
+        } else {
+          await ctx.runMutation(api.monitors.setStatus, {
+            workspaceId,
+            monitorId: monitor._id,
+            status: a.action === "pause" ? "paused" : "active",
+          });
+        }
+        return {
+          output: { ok: true, monitor: monitor.title, action: a.action },
+          action: {
+            kind: "monitor_updated",
+            label: `Monitor ${a.action}d: ${monitor.title}`,
+            entityType: "monitor",
+            entityId: monitor._id,
+            href: "/monitors",
+          },
+        };
       }
       default:
         return { output: { error: `Unknown tool: ${name}` } };

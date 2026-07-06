@@ -94,6 +94,39 @@ export const create = mutation({
   },
 });
 
+/** Move a scheduled reminder to a new time (used by the assistant + UI). */
+export const reschedule = mutation({
+  args: {
+    workspaceId: v.id("workspaces"),
+    reminderId: v.id("reminders"),
+    remindAt: v.number(),
+  },
+  handler: async (ctx, { workspaceId, reminderId, remindAt }) => {
+    const { identity } = await requireWorkspaceAccess(ctx, workspaceId);
+    const reminder = await ctx.db.get(reminderId);
+    if (!reminder || reminder.workspaceId !== workspaceId) {
+      throw new Error("Reminder not found in this workspace.");
+    }
+    if (!Number.isFinite(remindAt)) {
+      throw new Error("Reminder needs a valid time.");
+    }
+    await ctx.db.patch(reminderId, {
+      remindAt,
+      // Re-arm if it had already fired; a rescheduled reminder should fire again.
+      status: "scheduled",
+      updatedAt: Date.now(),
+    });
+    await writeAuditLog(ctx, {
+      workspaceId,
+      actorUserId: identity.clerkUserId,
+      action: "reminder.updated",
+      entityType: "reminder",
+      entityId: reminderId,
+      metadata: { rescheduledTo: remindAt },
+    });
+  },
+});
+
 export const cancel = mutation({
   args: { workspaceId: v.id("workspaces"), reminderId: v.id("reminders") },
   handler: async (ctx, { workspaceId, reminderId }) => {

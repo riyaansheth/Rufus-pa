@@ -145,6 +145,52 @@ export const createInternal = mutation({
 });
 
 /**
+ * Update an event in the internal store (reschedule/rename). MVP limitation: does
+ * NOT patch the mirrored Google event — callers should tell the user when the event
+ * had `source === "google"` so they can adjust it in Google Calendar too.
+ */
+export const updateInternal = mutation({
+  args: {
+    workspaceId: v.id("workspaces"),
+    eventId: v.id("calendarEvents"),
+    title: v.optional(v.string()),
+    startAt: v.optional(v.number()),
+    endAt: v.optional(v.number()),
+    location: v.optional(v.string()),
+  },
+  handler: async (ctx, { workspaceId, eventId, ...patchArgs }) => {
+    const { identity } = await requireWorkspaceAccess(ctx, workspaceId);
+    const event = await ctx.db.get(eventId);
+    if (!event || event.workspaceId !== workspaceId) {
+      throw new Error("Event not found in this workspace.");
+    }
+    const startAt = patchArgs.startAt ?? event.startAt;
+    const endAt = patchArgs.endAt ?? event.endAt;
+    if (!(endAt > startAt)) {
+      throw new Error("Event end time must be after start time.");
+    }
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    if (patchArgs.title !== undefined) patch.title = patchArgs.title.trim();
+    if (patchArgs.startAt !== undefined) patch.startAt = patchArgs.startAt;
+    if (patchArgs.endAt !== undefined) patch.endAt = patchArgs.endAt;
+    if (patchArgs.location !== undefined) patch.location = patchArgs.location;
+    await ctx.db.patch(eventId, patch);
+    await writeAuditLog(ctx, {
+      workspaceId,
+      actorUserId: identity.clerkUserId,
+      action: "calendar.event_created",
+      entityType: "calendarEvent",
+      entityId: eventId,
+      metadata: {
+        updated: true,
+        changes: Object.keys(patch).filter((k) => k !== "updatedAt"),
+      },
+    });
+    return { wasGoogleMirrored: event.source === "google" };
+  },
+});
+
+/**
  * Delete a calendar event from the internal store. (For MVP this does not delete the
  * mirrored Google event; that would require a Node action + the connection tokens.)
  */

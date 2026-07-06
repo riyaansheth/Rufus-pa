@@ -150,6 +150,16 @@ npm run lint        # eslint
 - Dashboard (tasks, reminders, events, approvals, monitors, recent activity).
 - AI assistant page (text + browser-microphone voice) with OpenAI tool-calling; the model
   calls safe backend tools only, never the DB directly. Suggested actions + confirmation cards.
+- **Hands-free voice conversation**: tap "Voice" — it listens (auto-detects when you stop
+  speaking), acts, and **speaks the reply back** (OpenAI TTS, `OPENAI_TTS_MODEL`), then
+  listens again. A 🔊 toggle reads replies aloud outside voice mode too.
+- **Manage by voice/name**: complete/reopen/cancel/delete/update tasks, cancel/reschedule
+  reminders, delete/reschedule/rename events, pause/resume/delete monitors — "mark the
+  vendor call as done". Ambiguous names → the assistant asks which one.
+- **Global voice command**: a mic in the header of every page sends a spoken command to the
+  assistant from anywhere.
+- **Daily briefing**: opt-in in Settings — one morning notification (your local time) with
+  tasks due, events, reminders, and approvals waiting.
 - Tasks, Reminders (with a 1-minute Convex cron that triggers them), Calendar (internal +
   Google mirror), Monitors, Approvals, Settings, Integrations, Admin audit logs.
 - Approval system with role-gated approve/reject and full audit logging.

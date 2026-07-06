@@ -63,14 +63,63 @@ export const me = query({
 
 /** Lazily sync the signed-in user into the `users` table. Idempotent. */
 export const syncCurrentUser = mutation({
-  args: {},
-  handler: async (ctx) => {
+  args: { timezone: v.optional(v.string()) },
+  handler: async (ctx, { timezone }) => {
     const identity = await requireIdentity(ctx);
-    return upsertUser(ctx, {
+    const userId = await upsertUser(ctx, {
       clerkUserId: identity.clerkUserId,
       email: identity.email,
       name: identity.name,
       imageUrl: identity.imageUrl,
+    });
+    // Keep the stored timezone fresh — the daily briefing fires at the user's
+    // local hour, so this must track where they actually are.
+    if (timezone) {
+      await ctx.db.patch(userId, { timezone, updatedAt: Date.now() });
+    }
+    return userId;
+  },
+});
+
+/** The current user's daily-briefing preferences (for the Settings page). */
+export const briefingPrefs = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUser", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    return {
+      briefingEnabled: user?.briefingEnabled ?? false,
+      briefingHour: user?.briefingHour ?? 8,
+      timezone: user?.timezone ?? null,
+    };
+  },
+});
+
+/** Enable/disable the proactive morning briefing and pick the local hour. */
+export const setBriefingPrefs = mutation({
+  args: {
+    briefingEnabled: v.boolean(),
+    briefingHour: v.optional(v.number()),
+  },
+  handler: async (ctx, { briefingEnabled, briefingHour }) => {
+    const identity = await requireIdentity(ctx);
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUser", (q) =>
+        q.eq("clerkUserId", identity.clerkUserId),
+      )
+      .unique();
+    if (!user) throw new Error("User not found — reload and try again.");
+    const hour = briefingHour ?? user.briefingHour ?? 8;
+    if (hour < 0 || hour > 23) throw new Error("Hour must be 0-23.");
+    await ctx.db.patch(user._id, {
+      briefingEnabled,
+      briefingHour: hour,
+      updatedAt: Date.now(),
     });
   },
 });

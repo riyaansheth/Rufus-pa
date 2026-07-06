@@ -13,6 +13,10 @@ import {
   Plus,
   ExternalLink,
   ShieldCheck,
+  AudioLines,
+  Square,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { PageHeader, RequireWorkspace } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
@@ -27,6 +31,8 @@ const SUGGESTIONS = [
   "What do I have today?",
   "Schedule a meeting with Rahul tomorrow at 4 PM.",
   "Remind me to review the vendor proposal on Friday morning.",
+  "Mark the vendor proposal task as done.",
+  "Move my meeting with Rahul to 6 PM.",
   "Track this product and alert me if the price goes below ₹5000.",
   "Prepare a purchase request for a team software subscription.",
   "Show my pending approvals.",
@@ -60,14 +66,118 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     workspaceId,
   });
 
+  // --- Voice conversation state ------------------------------------------
+  // voiceMode = continuous hands-free loop: listen → send → speak reply → listen.
+  // speakReplies = read replies aloud even outside voice mode (persisted).
+  const [voiceMode, setVoiceMode] = React.useState(false);
+  const voiceModeRef = React.useRef(false);
+  const [speakReplies, setSpeakReplies] = React.useState(false);
+  const speakRepliesRef = React.useRef(false);
+  const [speaking, setSpeaking] = React.useState(false);
+  const audioRef = React.useRef<HTMLAudioElement | null>(null);
+  const discardNextTranscriptRef = React.useRef(false);
+  const handleSendRef = React.useRef<(t: string) => void>(() => {});
+  const startListeningRef = React.useRef<() => void>(() => {});
+
+  React.useEffect(() => {
+    setSpeakReplies(window.localStorage.getItem("rufuspa.speakReplies") === "1");
+  }, []);
+  React.useEffect(() => {
+    speakRepliesRef.current = speakReplies;
+  }, [speakReplies]);
+  React.useEffect(() => {
+    voiceModeRef.current = voiceMode;
+  }, [voiceMode]);
+
   const {
     recording,
     busy: transcribing,
     toggle: toggleRecording,
+    start: startRecording,
+    stop: stopRecording,
   } = useVoiceRecorder({
-    onTranscript: (text) => setInput((prev) => (prev ? prev + " " : "") + text),
-    onError: (msg) => toast({ title: "Voice input failed", description: msg, variant: "error" }),
+    // Hands-free: a finished utterance sends itself — no send button needed.
+    onTranscript: (text) => {
+      if (discardNextTranscriptRef.current) {
+        discardNextTranscriptRef.current = false;
+        return;
+      }
+      handleSendRef.current(text);
+    },
+    onError: (msg) => {
+      setVoiceMode(false);
+      voiceModeRef.current = false;
+      toast({ title: "Voice input failed", description: msg, variant: "error" });
+    },
   });
+  startListeningRef.current = () => void startRecording();
+
+  function stopAudio() {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setSpeaking(false);
+  }
+
+  /** Speak `text` via /api/speak; resolves when playback finishes. */
+  async function speak(text: string): Promise<void> {
+    stopAudio();
+    try {
+      const res = await fetch("/api/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) return; // TTS is best-effort; the text reply is on screen
+      const url = URL.createObjectURL(await res.blob());
+      setSpeaking(true);
+      await new Promise<void>((resolve) => {
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        const done = () => {
+          URL.revokeObjectURL(url);
+          setSpeaking(false);
+          resolve();
+        };
+        audio.onended = done;
+        audio.onerror = done;
+        audio.onpause = done; // stopAudio() mid-playback also resolves
+        void audio.play().catch(done);
+      });
+    } catch {
+      setSpeaking(false);
+    }
+  }
+
+  function enterVoiceMode() {
+    stopAudio();
+    setVoiceMode(true);
+    voiceModeRef.current = true;
+    void startRecording();
+  }
+
+  function exitVoiceMode() {
+    setVoiceMode(false);
+    voiceModeRef.current = false;
+    if (recording) {
+      // Whatever is mid-recording shouldn't fire off a message after exit.
+      discardNextTranscriptRef.current = true;
+      stopRecording();
+    }
+    stopAudio();
+  }
+
+  // Escape exits voice mode.
+  React.useEffect(() => {
+    if (!voiceMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") exitVoiceMode();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceMode, recording]);
 
   React.useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -76,9 +186,11 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   async function handleSend(text: string) {
     const content = text.trim();
     if (!content || sending) return;
+    stopAudio(); // never talk over a new command (also avoids TTS feeding the mic)
     setInput("");
     setPendingUserMessage(content);
     setSending(true);
+    let reply: string | null = null;
     try {
       const res = await sendMessage({
         workspaceId,
@@ -88,6 +200,7 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
       setConversationId(res.conversationId);
+      reply = res.reply;
     } catch (err) {
       toast({
         title: "Assistant error",
@@ -99,7 +212,15 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
       setSending(false);
       setPendingUserMessage(null);
     }
+    if (reply && (speakRepliesRef.current || voiceModeRef.current)) {
+      await speak(reply);
+    }
+    // Hands-free loop: after the (spoken) reply, listen for the next command.
+    if (reply !== null && voiceModeRef.current) {
+      startListeningRef.current();
+    }
   }
+  handleSendRef.current = handleSend;
 
   const isEmpty =
     !pendingUserMessage &&
@@ -184,6 +305,35 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
           ) : null}
         </div>
 
+        {voiceMode ? (
+          <div className="flex items-center justify-between gap-3 border-t bg-primary/5 px-4 py-2.5">
+            <div className="flex items-center gap-2 text-sm">
+              <span
+                className={cn(
+                  "size-2.5 rounded-full",
+                  recording
+                    ? "animate-pulse bg-red-500"
+                    : speaking
+                      ? "animate-pulse bg-emerald-500"
+                      : "bg-muted-foreground",
+                )}
+              />
+              {recording
+                ? "Listening — just speak, I'll detect when you're done…"
+                : transcribing
+                  ? "Understanding…"
+                  : sending
+                    ? "Working on it…"
+                    : speaking
+                      ? "Speaking…"
+                      : "Voice conversation on"}
+            </div>
+            <Button variant="destructive" size="sm" onClick={exitVoiceMode}>
+              <Square /> End voice mode (Esc)
+            </Button>
+          </div>
+        ) : null}
+
         <div className="border-t p-3">
           <form
             onSubmit={(e) => {
@@ -207,18 +357,42 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
             />
             <Button
               type="button"
-              variant={recording ? "destructive" : "outline"}
+              variant={speakReplies ? "secondary" : "ghost"}
+              size="icon"
+              onClick={() => {
+                const next = !speakReplies;
+                setSpeakReplies(next);
+                window.localStorage.setItem("rufuspa.speakReplies", next ? "1" : "0");
+                if (!next) stopAudio();
+              }}
+              aria-label={speakReplies ? "Mute spoken replies" : "Speak replies aloud"}
+              title={speakReplies ? "Spoken replies ON" : "Speak replies aloud"}
+            >
+              {speakReplies ? <Volume2 /> : <VolumeX />}
+            </Button>
+            <Button
+              type="button"
+              variant={recording && !voiceMode ? "destructive" : "outline"}
               size="icon"
               onClick={toggleRecording}
-              disabled={transcribing}
-              aria-label="Voice input"
-              title="Voice input (browser microphone)"
+              disabled={transcribing || voiceMode}
+              aria-label="Voice input (one command)"
+              title="Speak one command — it sends automatically"
             >
               {transcribing ? (
                 <Loader2 className="animate-spin" />
               ) : (
                 <Mic className={recording ? "animate-pulse" : undefined} />
               )}
+            </Button>
+            <Button
+              type="button"
+              variant={voiceMode ? "destructive" : "default"}
+              onClick={voiceMode ? exitVoiceMode : enterVoiceMode}
+              title="Continuous voice conversation — it listens, acts, and talks back"
+            >
+              <AudioLines className={voiceMode ? "animate-pulse" : undefined} />
+              {voiceMode ? "Stop" : "Voice"}
             </Button>
             <Button type="submit" size="icon" disabled={sending || !input.trim()}>
               <Send />

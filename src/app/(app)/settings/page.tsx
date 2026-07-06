@@ -4,7 +4,16 @@ import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
-import { Settings2, Users, Plug, ShieldCheck, Copy, RefreshCw, UserPlus } from "lucide-react";
+import {
+  Settings2,
+  Users,
+  Plug,
+  ShieldCheck,
+  Copy,
+  RefreshCw,
+  UserPlus,
+  Sunrise,
+} from "lucide-react";
 import { PageHeader, RequireWorkspace } from "@/components/page-shell";
 import { useWorkspace } from "@/components/workspace-provider";
 import {
@@ -64,6 +73,8 @@ function SettingsView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
             </p>
           </CardContent>
         </Card>
+
+        <DailyBriefingCard />
 
         {isAdmin ? (
           <Card>
@@ -222,5 +233,83 @@ function SettingsView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         </Card>
       </div>
     </div>
+  );
+}
+
+function DailyBriefingCard() {
+  const prefs = useQuery(api.users.briefingPrefs);
+  const setPrefs = useMutation(api.users.setBriefingPrefs);
+  const { toast } = useToast();
+
+  async function save(enabled: boolean, hour?: number) {
+    try {
+      await setPrefs({ briefingEnabled: enabled, briefingHour: hour });
+      toast({
+        title: enabled ? "Daily briefing on" : "Daily briefing off",
+        variant: "success",
+      });
+    } catch (err) {
+      toast({
+        title: "Could not save",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      });
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Sunrise className="size-4" /> Daily briefing
+        </CardTitle>
+        <CardDescription>
+          Each morning, get one notification with your day at a glance — tasks due,
+          events, reminders, and approvals waiting. Uses your device timezone
+          {prefs?.timezone ? ` (${prefs.timezone})` : ""}.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-3">
+        {prefs === undefined ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          <>
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="size-4 accent-primary"
+                checked={prefs?.briefingEnabled ?? false}
+                onChange={(e) =>
+                  save(e.target.checked, prefs?.briefingHour ?? 8)
+                }
+              />
+              Send me a morning briefing
+            </label>
+            <div className="flex items-center gap-2 text-sm">
+              at
+              <Select
+                className="w-28"
+                value={String(prefs?.briefingHour ?? 8)}
+                onChange={(e) =>
+                  save(prefs?.briefingEnabled ?? false, Number(e.target.value))
+                }
+              >
+                {Array.from({ length: 24 }, (_, h) => (
+                  <option key={h} value={h}>
+                    {h === 0
+                      ? "12 AM"
+                      : h < 12
+                        ? `${h} AM`
+                        : h === 12
+                          ? "12 PM"
+                          : `${h - 12} PM`}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

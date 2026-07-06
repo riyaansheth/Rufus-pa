@@ -55,6 +55,13 @@ npx convex dev      # regenerates convex/_generated and pushes functions
 - **The assistant never mutates the DB directly.** To give it a new capability, add a
   guarded Convex function, then add a tool in `assistant.ts` (schema + Zod validation +
   a `dispatchTool` case that calls the guarded function). Nothing else.
+- **Manage-by-name tools** (`manageTask`/`manageReminder`/`manageCalendarEvent`/
+  `manageMonitor`) resolve records via `resolveByTitle` — one match acts, zero/many
+  returns candidates so the model asks. Keep that pattern for new manage tools. There is
+  deliberately NO approve/reject tool: approval decisions stay a human click.
+- **Voice**: `/api/transcribe` (STT) and `/api/speak` (TTS, `OPENAI_TTS_MODEL`) are
+  Clerk-gated Next routes; `use-voice-recorder.tsx` auto-stops on silence and auto-sends.
+  Timezone helpers live in `convex/lib/time.ts` (shared by assistant + briefing cron).
 - **Audit everything.** State changes call `writeAuditLog` with an action from the closed
   `AuditAction` union in `lib/audit.ts` (extend the union if you add an action).
 - **Secrets stay server-side.** External API keys/tokens live in Convex/Next server code and

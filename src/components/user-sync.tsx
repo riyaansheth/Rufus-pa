@@ -16,7 +16,10 @@ export function UserSync() {
   React.useEffect(() => {
     if (isAuthenticated && !done.current) {
       done.current = true;
-      sync().catch(() => {
+      // Timezone powers the daily briefing (fires at the user's LOCAL hour).
+      sync({
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }).catch(() => {
         done.current = false;
       });
     }

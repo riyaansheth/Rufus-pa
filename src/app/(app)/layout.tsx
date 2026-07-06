@@ -7,6 +7,7 @@ import { WorkspaceProvider, useWorkspace } from "@/components/workspace-provider
 import { AppSidebar } from "@/components/app-sidebar";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { NotificationBell } from "@/components/notification-bell";
+import { QuickCapture } from "@/components/quick-capture";
 import { UserSync } from "@/components/user-sync";
 import { OnboardingCard } from "@/components/onboarding-card";
 
@@ -39,6 +40,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         <header className="flex h-14 items-center justify-between gap-4 border-b bg-card/40 px-4 md:px-6">
           <WorkspaceSwitcher />
           <div className="flex items-center gap-2">
+            <QuickCapture />
             <NotificationBell />
             <UserButton afterSignOutUrl="/" />
           </div>

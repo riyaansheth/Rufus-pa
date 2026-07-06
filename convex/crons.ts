@@ -24,4 +24,13 @@ crons.interval(
   {},
 );
 
+// Every 30 min so half-hour timezones (e.g. IST) still get their briefing within
+// the chosen local hour. Dedupes per user per local day.
+crons.interval(
+  "send-daily-briefings",
+  { minutes: 30 },
+  internal.scheduled.sendDailyBriefings,
+  {},
+);
+
 export default crons;

@@ -25,6 +25,7 @@ import type * as integrations_manualMonitor from "../integrations/manualMonitor.
 import type * as integrations_microsoftCalendar from "../integrations/microsoftCalendar.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_time from "../lib/time.js";
 import type * as memberships from "../memberships.js";
 import type * as monitors from "../monitors.js";
 import type * as notifications from "../notifications.js";
@@ -58,6 +59,7 @@ declare const fullApi: ApiFromModules<{
   "integrations/microsoftCalendar": typeof integrations_microsoftCalendar;
   "lib/audit": typeof lib_audit;
   "lib/auth": typeof lib_auth;
+  "lib/time": typeof lib_time;
   memberships: typeof memberships;
   monitors: typeof monitors;
   notifications: typeof notifications;
