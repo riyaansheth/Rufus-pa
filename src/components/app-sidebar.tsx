@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 import { Logo } from "@/components/logo";
 import { useWorkspace } from "@/components/workspace-provider";
 
-const NAV = [
+export const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/assistant", label: "Assistant", icon: Sparkles },
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
@@ -28,7 +28,7 @@ const NAV = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
-const ADMIN_NAV = [
+export const ADMIN_NAV = [
   { href: "/admin/audit-logs", label: "Audit Logs", icon: ScrollText },
 ];
 
@@ -65,21 +65,24 @@ export function AppSidebar() {
   );
 }
 
-function NavLink({
+export function NavLink({
   href,
   label,
   icon: Icon,
   pathname,
+  onNavigate,
 }: {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   pathname: string;
+  onNavigate?: () => void;
 }) {
   const active = pathname === href || pathname.startsWith(href + "/");
   return (
     <Link
       href={href}
+      onClick={onNavigate}
       className={cn(
         "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
         active

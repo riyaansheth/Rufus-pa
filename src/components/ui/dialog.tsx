@@ -40,7 +40,7 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         className={cn(
-          "relative z-10 w-full max-w-lg rounded-xl border bg-card p-6 shadow-lg animate-in fade-in zoom-in-95",
+          "relative z-10 max-h-[85dvh] w-full max-w-lg overflow-y-auto rounded-xl border bg-card p-5 shadow-lg animate-in fade-in zoom-in-95 sm:p-6",
           className,
         )}
       >

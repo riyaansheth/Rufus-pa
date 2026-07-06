@@ -13,6 +13,8 @@ import { GoogleAutoConnect } from "@/components/google-auto-connect";
 import { UserSync } from "@/components/user-sync";
 import { OnboardingCard } from "@/components/onboarding-card";
 import { ProfileSetup } from "@/components/profile-setup";
+import { MobileNav } from "@/components/mobile-nav";
+import { InstallPrompt } from "@/components/install-prompt";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -49,9 +51,12 @@ function Shell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen">
       <AppSidebar />
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between gap-4 border-b bg-card/40 px-4 md:px-6">
-          <WorkspaceSwitcher />
-          <div className="flex items-center gap-2">
+        <header className="flex h-14 items-center justify-between gap-2 border-b bg-card/40 px-2 pt-[env(safe-area-inset-top)] sm:gap-4 sm:px-4 md:px-6">
+          <div className="flex min-w-0 items-center gap-1 sm:gap-2">
+            <MobileNav />
+            <WorkspaceSwitcher />
+          </div>
+          <div className="flex items-center gap-1 sm:gap-2">
             <QuickCapture />
             <NotificationBell />
             <UserButton afterSignOutUrl="/" />
@@ -63,7 +68,10 @@ function Shell({ children }: { children: React.ReactNode }) {
               <OnboardingCard />
             </div>
           ) : (
-            children
+            <>
+              <InstallPrompt />
+              {children}
+            </>
           )}
         </main>
       </div>
