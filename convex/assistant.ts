@@ -698,17 +698,16 @@ type NowPlayingMovie = {
  * live data (no scraping). Region defaults to India (TMDB_REGION). Requires
  * TMDB_API_KEY on the Convex deployment.
  */
-async function fetchNowPlaying(): Promise<{
-  movies?: NowPlayingMovie[];
-  region?: string;
-  error?: string;
-}> {
+async function fetchNowPlaying(): Promise<Record<string, unknown>> {
   const key = process.env.TMDB_API_KEY;
   if (!key) {
-    return {
-      error:
-        "Live movie listings aren't configured yet (TMDB_API_KEY missing on the deployment).",
-    };
+    // No TMDB key configured → use the live web search we already have, so cinema
+    // listings still work with zero setup (just less structured than TMDB).
+    const ws = await runWebSearch(
+      "What movies are currently playing in cinemas / theatres in India right now this week? List the exact film titles that are showing now.",
+    );
+    if (ws.error) return { source: "web", error: ws.error };
+    return { source: "web", answer: ws.answer, sources: ws.sources };
   }
   const region = process.env.TMDB_REGION || "IN";
   try {
@@ -734,7 +733,7 @@ async function fetchNowPlaying(): Promise<{
             ? m.overview.slice(0, 160)
             : undefined,
       }));
-    return { movies, region };
+    return { source: "tmdb", movies, region };
   } catch (err) {
     return { error: err instanceof Error ? err.message : "TMDB fetch failed." };
   }
