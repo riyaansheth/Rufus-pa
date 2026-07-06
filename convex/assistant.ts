@@ -9,7 +9,12 @@ import { action, ActionCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { toMs, todayWindowInTz } from "./lib/time";
-import { buildDeepLink } from "./lib/deepLinks";
+import {
+  buildDeepLink,
+  bookMyShowCityUrl,
+  isBookMyShowEventUrl,
+  isBookMyShowUrl,
+} from "./lib/deepLinks";
 
 /**
  * The AI assistant.
@@ -555,6 +560,34 @@ async function runWebSearch(
   }
 }
 
+/**
+ * Resolve the best URL to OPEN for a booking request. For movies/events, use live
+ * web search to find the SPECIFIC BookMyShow movie page (which needs BMS's internal
+ * event id we can't scrape) and open that; fall back to BookMyShow's city listing
+ * (never Google, never a bare homepage). An explicit user URL always wins.
+ */
+async function resolveBookingUrl(
+  kind: "product" | "movie_ticket" | "event" | "generic_url",
+  query: string,
+  city?: string,
+  explicitUrl?: string,
+): Promise<string | undefined> {
+  if (explicitUrl && explicitUrl.trim()) return explicitUrl.trim();
+  if (kind === "movie_ticket" || kind === "event") {
+    const terms = [query, city, "book tickets BookMyShow showtimes"]
+      .filter(Boolean)
+      .join(" ");
+    const res = await runWebSearch(terms);
+    // Prefer a specific movie/event page; else any BookMyShow link.
+    const specific = res.sources.find((s) => isBookMyShowEventUrl(s.url));
+    if (specific) return specific.url;
+    const anyBms = res.sources.find((s) => isBookMyShowUrl(s.url));
+    if (anyBms) return anyBms.url;
+    return bookMyShowCityUrl(city);
+  }
+  return buildDeepLink({ kind, title: query, query, city, url: explicitUrl });
+}
+
 export const sendMessage = action({
   args: {
     workspaceId: v.id("workspaces"),
@@ -968,23 +1001,19 @@ async function dispatchTool(
       }
       case "openBookingLink": {
         const a = schemas.openBookingLink.parse(parsed);
-        const url = buildDeepLink({
-          kind: a.type,
-          title: a.searchQuery,
-          query: a.searchQuery,
-          url: a.url,
-          city: a.city,
-        });
+        // Find the actual BookMyShow movie page via web search (falls back to the
+        // BMS city listing) so it opens the film, not a search engine.
+        const url = await resolveBookingUrl(a.type, a.searchQuery, a.city, a.url);
         if (!url) return { output: { error: "Could not build a booking link." } };
         return {
           output: {
             ok: true,
             url,
-            note: "Opening the booking page now. You complete seat selection, payment, and OTP yourself — I never check out for you.",
+            note: "Opening the BookMyShow page for this now. You choose the showtime, seats, and complete payment/OTP yourself — I never check out for you.",
           },
           action: {
             kind: "open_booking",
-            label: `Open booking: ${a.searchQuery}`,
+            label: `Open on BookMyShow: ${a.searchQuery}`,
             href: url,
             autoOpen: true,
           },

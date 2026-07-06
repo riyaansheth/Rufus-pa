@@ -24,17 +24,38 @@ export function buildDeepLink(args: {
   const term = (args.query ?? args.title).trim();
   switch (args.kind) {
     case "movie_ticket":
-    case "event": {
-      // BookMyShow has no public deep link to a specific movie's booking page
-      // without its internal event id (which we won't scrape). A city-scoped
-      // Google search reliably lands the top result on the exact BookMyShow
-      // movie page — one tap to the right film, ToS-friendly.
-      const parts = [term, args.city, "BookMyShow book tickets"].filter(Boolean);
-      return `https://www.google.com/search?q=${encodeURIComponent(parts.join(" "))}`;
-    }
+    case "event":
+      // Synchronous fallback: land ON BookMyShow (never Google). The assistant
+      // resolves the SPECIFIC movie page via web search at request time
+      // (resolveBookingUrl in assistant.ts); this is used when that's skipped.
+      return bookMyShowCityUrl(args.city);
     case "product":
       return `https://www.amazon.in/s?k=${encodeURIComponent(term)}`;
     default:
       return undefined;
   }
+}
+
+/** BookMyShow city movie listing (or homepage if no city). */
+export function bookMyShowCityUrl(city?: string): string {
+  const slug = city
+    ? city
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+    : "";
+  return slug
+    ? `https://in.bookmyshow.com/explore/movies-${slug}`
+    : "https://in.bookmyshow.com/";
+}
+
+/** True for a BookMyShow URL that points at a specific movie/event/play page. */
+export function isBookMyShowEventUrl(url: string): boolean {
+  return /bookmyshow\.com\/(movies|events|plays|sports)\//i.test(url);
+}
+
+/** True for any BookMyShow URL. */
+export function isBookMyShowUrl(url: string): boolean {
+  return /(^|\.)bookmyshow\.com/i.test(url);
 }
