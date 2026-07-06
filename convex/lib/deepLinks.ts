@@ -17,7 +17,7 @@ export function buildDeepLink(args: {
   query?: string;
 }): string | undefined {
   // An explicit URL from the user always wins.
-  if (args.url && args.url.trim()) return args.url.trim();
+  if (args.url && args.url.trim()) return applyAffiliate(args.url.trim());
 
   // Prefer the clean search term (movie/product name) over the verbose monitor
   // title, which often carries dates/seats/venue text that breaks search.
@@ -28,12 +28,29 @@ export function buildDeepLink(args: {
       // Synchronous fallback: land ON BookMyShow (never Google). The assistant
       // resolves the SPECIFIC movie page via web search at request time
       // (resolveBookingUrl in assistant.ts); this is used when that's skipped.
-      return bookMyShowCityUrl(args.city);
+      return applyAffiliate(bookMyShowCityUrl(args.city));
     case "product":
-      return `https://www.amazon.in/s?k=${encodeURIComponent(term)}`;
+      return applyAffiliate(`https://www.amazon.in/s?k=${encodeURIComponent(term)}`);
     default:
       return undefined;
   }
+}
+
+/**
+ * Wrap a provider URL with an affiliate/partner redirect when configured. Set
+ * AFFILIATE_LINK_TEMPLATE on the Convex deployment to something like
+ * `https://linksredirect.com/?cid=XXXXX&source=linkkit&url={url}` (Cuelinks) or
+ * your INRDeals/other network's deep-link format containing `{url}`. Idempotent
+ * (won't double-wrap) and a no-op until the env var is set — so booking links
+ * become monetized the moment you paste your template, with zero code changes.
+ */
+export function applyAffiliate(url?: string): string | undefined {
+  if (!url) return url;
+  const tmpl = process.env.AFFILIATE_LINK_TEMPLATE;
+  if (!tmpl || !tmpl.includes("{url}")) return url;
+  const prefix = tmpl.split("{url}")[0];
+  if (prefix && url.startsWith(prefix)) return url; // already wrapped
+  return tmpl.replace("{url}", encodeURIComponent(url));
 }
 
 /** BookMyShow city movie listing (or homepage if no city). */

@@ -15,6 +15,7 @@ import {
   bmsShowtimesUrl,
   isBookMyShowEventUrl,
   isBookMyShowUrl,
+  applyAffiliate,
 } from "./lib/deepLinks";
 
 /**
@@ -36,7 +37,10 @@ MEMORY: You remember the user across conversations. Their profile (name, locatio
 
 REAL-TIME KNOWLEDGE: You have LIVE web access via the webSearch tool. You are not limited to training data. Whenever a question depends on current, recent, or real-world facts — news, prices, weather, sports scores, stock/crypto quotes, product availability, schedules, "who/what/when is…", flight/travel info, anything that could have changed after your training cut-off, or anything you're not fully certain about — call webSearch FIRST and answer from the fresh results. Prefer searching over guessing. You can answer questions on ANY topic in the world this way. When you use search results, weave in the key facts and, when helpful, mention the source. Do not claim you lack internet access or real-time data — you have both.
 
-CRITICAL: For anything about what is CURRENT/happening NOW — movies now showing or in cinemas, this week's releases, latest news, today's weather, current prices, live scores, what's trending, what's available — you MUST call webSearch first and answer ONLY from those results. NEVER list current movies, showtimes, news, prices, or "what's out now" from memory: your training data is stale and will be wrong. If you're about to answer a "now/currently/latest/today" question without having searched, stop and search first.
+CRITICAL: For anything about what is CURRENT/happening NOW — movies now showing or in cinemas, this week's releases, latest news, today's weather, current prices, live scores, what's trending, what's available — you MUST call a live tool first and answer ONLY from those results. NEVER list current movies, showtimes, news, prices, or "what's out now" from memory: your training data is stale and will be wrong.
+- For MOVIES currently in cinemas/theatres, use the nowPlayingMovies tool (real TMDB data). Present the titles cleanly and offer to open BookMyShow for whichever they pick.
+- For everything else current, use webSearch.
+If you're about to answer a "now/currently/latest/today" question without having called a tool, stop and call one first.
 
 CRITICAL SAFETY RULES — never violate these:
 - You are a SUPERVISED assistant, not an auto-purchase bot.
@@ -205,6 +209,15 @@ const tools: ChatCompletionTool[] = [
         },
         required: ["type", "title"],
       },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "nowPlayingMovies",
+      description:
+        "Get the movies CURRENTLY in cinemas/theatres right now — real live data (TMDB, region India by default). ALWAYS use this for 'what's showing now', 'movies in cinema', 'latest releases in theatres', etc. Never answer those from memory or generic web search.",
+      parameters: { type: "object", properties: {} },
     },
   },
   {
@@ -600,6 +613,22 @@ function needsRealtime(text: string): boolean {
 }
 
 /**
+ * Is this a "what movies are in cinemas now?" question? If so we force the
+ * nowPlayingMovies (TMDB) tool for accurate live data. Excludes booking/action
+ * commands ("book …", "remind …").
+ */
+function isMovieNowQuery(text: string): boolean {
+  const t = text.toLowerCase();
+  if (/\b(book|remind|track|monitor|create|schedule)\b/.test(t)) return false;
+  const cinema =
+    /\b(movie|movies|cinema|cinemas|film|films)\b/.test(t) &&
+    /\b(showing|cinema|cinemas|theat(er|re)s?|playing|out|release|released|watch|see|good|recommend|any|what)\b/.test(
+      t,
+    );
+  return cinema;
+}
+
+/**
  * Server-side "does the user want this booked/opened RIGHT NOW?" check — mirrors
  * the client heuristic. Used to auto-open a booking URL even when the model chose
  * a different tool than openBookingLink.
@@ -629,7 +658,7 @@ async function resolveBookingUrl(
   explicitUrl?: string,
   isoDate?: string,
 ): Promise<string | undefined> {
-  if (explicitUrl && explicitUrl.trim()) return explicitUrl.trim();
+  if (explicitUrl && explicitUrl.trim()) return applyAffiliate(explicitUrl.trim());
   if (kind === "movie_ticket" || kind === "event") {
     // Ask for the URL explicitly — the answer text often carries it even when
     // the citation list doesn't.
@@ -650,10 +679,65 @@ async function resolveBookingUrl(
         ? isoDate.slice(0, 10).replace(/-/g, "")
         : undefined;
     const specific = candidates.find(isBookMyShowEventUrl);
-    if (specific) return bmsShowtimesUrl(specific, yyyymmdd);
-    return candidates[0] ?? bookMyShowCityUrl(city);
+    if (specific) return applyAffiliate(bmsShowtimesUrl(specific, yyyymmdd));
+    return applyAffiliate(candidates[0] ?? bookMyShowCityUrl(city));
   }
   return buildDeepLink({ kind, title: query, query, city, url: explicitUrl });
+}
+
+type NowPlayingMovie = {
+  title: string;
+  releaseDate?: string;
+  language?: string;
+  rating?: number;
+  overview?: string;
+};
+
+/**
+ * Movies CURRENTLY in theatres, from TMDB's official now_playing endpoint — real
+ * live data (no scraping). Region defaults to India (TMDB_REGION). Requires
+ * TMDB_API_KEY on the Convex deployment.
+ */
+async function fetchNowPlaying(): Promise<{
+  movies?: NowPlayingMovie[];
+  region?: string;
+  error?: string;
+}> {
+  const key = process.env.TMDB_API_KEY;
+  if (!key) {
+    return {
+      error:
+        "Live movie listings aren't configured yet (TMDB_API_KEY missing on the deployment).",
+    };
+  }
+  const region = process.env.TMDB_REGION || "IN";
+  try {
+    const url = `https://api.themoviedb.org/3/movie/now_playing?region=${region}&language=en-US&page=1&api_key=${encodeURIComponent(
+      key,
+    )}`;
+    const res = await fetch(url);
+    if (!res.ok) return { error: `TMDB error ${res.status}.` };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = (await res.json()) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const results: any[] = Array.isArray(data?.results) ? data.results : [];
+    const movies: NowPlayingMovie[] = results
+      .sort((a, b) => (b?.popularity ?? 0) - (a?.popularity ?? 0))
+      .slice(0, 12)
+      .map((m) => ({
+        title: String(m?.title ?? m?.original_title ?? "Untitled"),
+        releaseDate: m?.release_date || undefined,
+        language: m?.original_language || undefined,
+        rating: typeof m?.vote_average === "number" ? m.vote_average : undefined,
+        overview:
+          typeof m?.overview === "string" && m.overview
+            ? m.overview.slice(0, 160)
+            : undefined,
+      }));
+    return { movies, region };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "TMDB fetch failed." };
+  }
 }
 
 export const sendMessage = action({
@@ -806,16 +890,21 @@ export const sendMessage = action({
     // "book now" opens the page even if the model reached for a different tool.
     const collectedBookingUrls: string[] = [];
 
-    // Force a live web search on the FIRST turn for "what's current" questions,
-    // so real-time answers can't come from stale training data.
-    const forceSearchFirst = needsRealtime(args.content);
+    // Force a live tool on the FIRST turn for "what's current" questions, so
+    // answers can't come from stale training data. Movies-in-cinema → TMDB;
+    // other current/real-world questions → web search.
+    const forcedFirstTool = isMovieNowQuery(args.content)
+      ? "nowPlayingMovies"
+      : needsRealtime(args.content)
+        ? "webSearch"
+        : null;
 
     let reply = "";
     // Bounded tool loop.
     for (let iteration = 0; iteration < 6; iteration++) {
       const toolChoice =
-        iteration === 0 && forceSearchFirst
-          ? { type: "function" as const, function: { name: "webSearch" } }
+        iteration === 0 && forcedFirstTool
+          ? { type: "function" as const, function: { name: forcedFirstTool } }
           : "auto";
       let completion;
       try {
@@ -945,6 +1034,9 @@ async function dispatchTool(
 
   try {
     switch (name) {
+      case "nowPlayingMovies": {
+        return { output: await fetchNowPlaying() };
+      }
       case "webSearch": {
         const a = schemas.webSearch.parse(parsed);
         const result = await runWebSearch(a.query);
