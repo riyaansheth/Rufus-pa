@@ -37,6 +37,8 @@ CRITICAL SAFETY RULES — never violate these:
 - Never claim an action succeeded unless a tool call actually returned success.
 - Only ask for missing details when genuinely required; otherwise pick sensible defaults and proceed.
 
+BOOK NOW vs TRACK LATER: If the user wants to book/buy something RIGHT NOW (urgency words like "now", "book it", "right now", "immediately", "open it", "let's book"), call openBookingLink to open the provider page immediately — do NOT create a monitor for that. Only create a monitor (createAvailabilityMonitor) when they want to be ALERTED later or when bookings aren't open yet. Opening the page is fine; you still never select seats or complete payment/OTP — say so briefly.
+
 For movie/event ticket requests:
 - Always pass the BARE film/event name as searchQuery (e.g. "Obsession"), separate from the verbose title — this builds a booking deep link that opens the exact movie for the user's city (not just the provider's homepage). Include the user's city when mentioned (or ask once).
 - RECOMMENDED SEATS: use the webSearch tool to look up the best/recommended seats for that specific cinema (e.g. "best seats at PVR Marine Lines Mumbai" or general guidance for that screen), and put a short recommendation in the monitor's note and the approval description (e.g. "Recommended: rows H–K, center block"). You are only ADVISING which seats to pick — you never select seats or complete booking. The human chooses seats and pays on the provider's site.
@@ -200,6 +202,31 @@ const tools: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "openBookingLink",
+      description:
+        "IMMEDIATELY open the booking/product page in the user's browser when they want to book or buy something RIGHT NOW (urgency keywords: 'now', 'book it', 'right now', 'immediately', 'open it', 'let's go'). This only OPENS the provider page — the human still selects seats and completes payment/OTP; you never checkout. Use createAvailabilityMonitor instead when they want to be alerted LATER, not open it now.",
+      parameters: {
+        type: "object",
+        properties: {
+          type: {
+            type: "string",
+            enum: ["product", "movie_ticket", "event", "generic_url"],
+          },
+          searchQuery: {
+            type: "string",
+            description:
+              "The bare movie/product/event name to open (e.g. 'Obsession'), without dates/seats/venue text.",
+          },
+          city: { type: "string", description: "User's city (for ticket bookings)" },
+          url: { type: "string", description: "An explicit URL, if the user gave one (wins)." },
+        },
+        required: ["type", "searchQuery"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "createPurchaseRequest",
       description:
         "Prepare a purchase or booking APPROVAL request for a human to approve. Never completes payment.",
@@ -357,6 +384,10 @@ type ActionDescriptor = {
   entityType?: string;
   entityId?: string;
   href?: string;
+  // When true, the client should immediately open `href` (e.g. a "book now"
+  // request). Opening a page is NOT completing checkout — the human still
+  // selects seats and pays.
+  autoOpen?: boolean;
 };
 
 // Zod validation for each tool's arguments (defense against malformed model output).
@@ -402,6 +433,12 @@ const schemas = {
     priceBelow: z.number().optional(),
     currency: z.string().optional(),
     note: z.string().optional(),
+  }),
+  openBookingLink: z.object({
+    type: z.enum(["product", "movie_ticket", "event", "generic_url"]),
+    searchQuery: z.string().min(1),
+    city: z.string().optional(),
+    url: z.string().optional(),
   }),
   createPurchaseRequest: z.object({
     title: z.string().min(1),
@@ -530,7 +567,11 @@ export const sendMessage = action({
   handler: async (
     ctx,
     args,
-  ): Promise<{ conversationId: Id<"assistantConversations">; reply: string }> => {
+  ): Promise<{
+    conversationId: Id<"assistantConversations">;
+    reply: string;
+    openUrl?: string;
+  }> => {
     const apiKey = process.env.OPENAI_API_KEY;
     // Verify workspace access (throws if not a member).
     await ctx.runQuery(api.memberships.myRole, { workspaceId: args.workspaceId });
@@ -755,7 +796,11 @@ export const sendMessage = action({
       actions: collectedActions.length ? collectedActions : undefined,
     });
 
-    return { conversationId, reply };
+    // A "book now" request flags an action to open immediately; hand the URL back
+    // to the client so it can open the provider page (the human still checks out).
+    const openUrl = collectedActions.find((a) => a.autoOpen && a.href)?.href;
+
+    return { conversationId, reply, openUrl };
   },
 });
 
@@ -918,6 +963,30 @@ async function dispatchTool(
             entityType: "monitor",
             entityId: id,
             href: "/monitors",
+          },
+        };
+      }
+      case "openBookingLink": {
+        const a = schemas.openBookingLink.parse(parsed);
+        const url = buildDeepLink({
+          kind: a.type,
+          title: a.searchQuery,
+          query: a.searchQuery,
+          url: a.url,
+          city: a.city,
+        });
+        if (!url) return { output: { error: "Could not build a booking link." } };
+        return {
+          output: {
+            ok: true,
+            url,
+            note: "Opening the booking page now. You complete seat selection, payment, and OTP yourself — I never check out for you.",
+          },
+          action: {
+            kind: "open_booking",
+            label: `Open booking: ${a.searchQuery}`,
+            href: url,
+            autoOpen: true,
           },
         };
       }

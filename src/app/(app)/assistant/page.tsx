@@ -249,6 +249,22 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     });
   }
 
+  /**
+   * Open a booking/provider page for a "book now" request. Best-effort: browsers
+   * may block a pop-up opened after an async round-trip, so on failure we point
+   * the user at the clickable link that's also rendered in the reply.
+   */
+  function openBookingWindow(url: string) {
+    const win = window.open(url, "_blank", "noopener,noreferrer");
+    if (!win) {
+      toast({
+        title: "Tap to open the booking page",
+        description:
+          "Your browser blocked the pop-up — tap the booking link in my reply.",
+      });
+    }
+  }
+
   function enterVoiceMode() {
     stopAudio();
     setVoiceMode(true);
@@ -320,6 +336,8 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
       });
       setConversationId(res.conversationId);
       reply = res.reply;
+      // "Book now" → open the provider page immediately (human still checks out).
+      if (res.openUrl) openBookingWindow(res.openUrl);
     } catch (err) {
       toast({
         title: "Assistant error",
@@ -586,5 +604,14 @@ function ActionCard({ action }: { action: Action }) {
       {action.href ? <ExternalLink className="size-3 text-muted-foreground" /> : null}
     </div>
   );
-  return action.href ? <Link href={action.href}>{body}</Link> : body;
+  if (!action.href) return body;
+  // External links (booking/product pages) open in a new tab; internal routes
+  // use client-side navigation.
+  return /^https?:\/\//.test(action.href) ? (
+    <a href={action.href} target="_blank" rel="noopener noreferrer">
+      {body}
+    </a>
+  ) : (
+    <Link href={action.href}>{body}</Link>
+  );
 }

@@ -35,6 +35,16 @@ export function QuickCapture() {
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
         toast({ title: "Assistant", description: res.reply, variant: "success" });
+        // "Book now" → open the provider page (human completes checkout).
+        if (res.openUrl) {
+          const win = window.open(res.openUrl, "_blank", "noopener,noreferrer");
+          if (!win) {
+            toast({
+              title: "Open the booking page",
+              description: res.openUrl,
+            });
+          }
+        }
         if (window.localStorage.getItem("rufuspa.speakReplies") === "1") {
           void speakOnce(res.reply);
         }
