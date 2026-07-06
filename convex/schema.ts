@@ -249,6 +249,7 @@ export default defineSchema({
           entityType: v.optional(v.string()),
           entityId: v.optional(v.string()),
           href: v.optional(v.string()),
+          autoOpen: v.optional(v.boolean()),
         }),
       ),
     ),
