@@ -568,6 +568,23 @@ async function runWebSearch(
 }
 
 /**
+ * Server-side "does the user want this booked/opened RIGHT NOW?" check — mirrors
+ * the client heuristic. Used to auto-open a booking URL even when the model chose
+ * a different tool than openBookingLink.
+ */
+function isBookNowIntent(text: string): boolean {
+  const t = text.toLowerCase();
+  const action =
+    /\b(book|buy|purchase|reserve|ticket|tickets|catch|watch|see)\b/.test(t);
+  const soon =
+    /\b(now|right now|immediately|asap|tonight|today|tomorrow)\b/.test(t) ||
+    /\bthis (evening|afternoon|morning|weekend|friday|saturday|sunday)\b/.test(t) ||
+    /\b(book|open|buy) it\b/.test(t) ||
+    /\blet'?s (go|book|buy)\b/.test(t);
+  return action && soon;
+}
+
+/**
  * Resolve the best URL to OPEN for a booking request. For movies/events, use live
  * web search to find the SPECIFIC BookMyShow movie page (which needs BMS's internal
  * event id we can't scrape) and open that; fall back to BookMyShow's city listing
@@ -753,6 +770,9 @@ export const sendMessage = action({
         }
       : { temperature: 0.2 };
     const collectedActions: ActionDescriptor[] = [];
+    // Booking URLs produced this turn by ANY tool (open/monitor), so an urgent
+    // "book now" opens the page even if the model reached for a different tool.
+    const collectedBookingUrls: string[] = [];
 
     let reply = "";
     // Bounded tool loop.
@@ -797,7 +817,7 @@ export const sendMessage = action({
             });
             continue;
           }
-          const { output, action } = await dispatchTool(
+          const { output, action, bookingUrl } = await dispatchTool(
             ctx,
             args.workspaceId,
             tz,
@@ -805,6 +825,7 @@ export const sendMessage = action({
             call.function.arguments,
           );
           if (action) collectedActions.push(action);
+          if (bookingUrl) collectedBookingUrls.push(bookingUrl);
           messages.push({
             role: "tool",
             tool_call_id: call.id,
@@ -848,9 +869,13 @@ export const sendMessage = action({
       actions: collectedActions.length ? collectedActions : undefined,
     });
 
-    // A "book now" request flags an action to open immediately; hand the URL back
-    // to the client so it can open the provider page (the human still checks out).
-    const openUrl = collectedActions.find((a) => a.autoOpen && a.href)?.href;
+    // Decide whether to auto-open a booking page. Priority: an explicit autoOpen
+    // action (openBookingLink). Fallback: if the USER's message was an urgent
+    // "book now" and ANY tool produced a booking URL this turn, open it too — so
+    // it works even when the model reached for createAvailabilityMonitor instead.
+    const openUrl =
+      collectedActions.find((a) => a.autoOpen && a.href)?.href ??
+      (isBookNowIntent(args.content) ? collectedBookingUrls[0] : undefined);
 
     return { conversationId, reply, openUrl };
   },
@@ -866,7 +891,11 @@ async function dispatchTool(
   tz: string,
   name: string,
   rawArgs: string,
-): Promise<{ output: unknown; action?: ActionDescriptor }> {
+): Promise<{
+  output: unknown;
+  action?: ActionDescriptor;
+  bookingUrl?: string;
+}> {
   let parsed: unknown = {};
   try {
     parsed = rawArgs ? JSON.parse(rawArgs) : {};
@@ -1016,6 +1045,8 @@ async function dispatchTool(
             entityId: id,
             href: "/monitors",
           },
+          // If the user actually wanted it NOW, this URL gets auto-opened.
+          bookingUrl: url ?? undefined,
         };
       }
       case "openBookingLink": {
@@ -1042,6 +1073,7 @@ async function dispatchTool(
             href: url,
             autoOpen: true,
           },
+          bookingUrl: url,
         };
       }
       case "createPurchaseRequest": {

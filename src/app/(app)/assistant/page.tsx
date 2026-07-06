@@ -588,10 +588,11 @@ type Action = {
 function looksLikeBookNow(text: string): boolean {
   const t = text.toLowerCase();
   const wantsAction =
-    /\b(book|buy|purchase|order|reserve|get|open)\b/.test(t) ||
+    /\b(book|buy|purchase|order|reserve|catch|watch|see)\b/.test(t) ||
     /\btickets?\b/.test(t);
   const isUrgent =
-    /\b(now|right now|immediately|asap|straight ?away)\b/.test(t) ||
+    /\b(now|right now|immediately|asap|tonight|today|tomorrow)\b/.test(t) ||
+    /\bthis (evening|afternoon|morning|weekend|friday|saturday|sunday)\b/.test(t) ||
     /\b(book|open|buy) it\b/.test(t) ||
     /\blet'?s (go|book|buy)\b/.test(t);
   return wantsAction && isUrgent;
