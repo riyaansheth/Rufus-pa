@@ -322,6 +322,13 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     const content = text.trim();
     if (!content || sending) return;
     stopAudio(); // never talk over a new command (also avoids TTS feeding the mic)
+    // If this looks like a "book now" request, open a placeholder tab NOW —
+    // synchronously inside the click gesture — so pop-up blockers don't stop us.
+    // We redirect it to the real link once the reply arrives, or close it if the
+    // assistant didn't actually produce a booking link.
+    const preOpened = looksLikeBookNow(content)
+      ? window.open("about:blank", "_blank")
+      : null;
     setInput("");
     setPendingUserMessage(content);
     setSending(true);
@@ -337,8 +344,22 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
       setConversationId(res.conversationId);
       reply = res.reply;
       // "Book now" → open the provider page immediately (human still checks out).
-      if (res.openUrl) openBookingWindow(res.openUrl);
+      if (res.openUrl) {
+        if (preOpened && !preOpened.closed) {
+          preOpened.location.href = res.openUrl;
+          try {
+            preOpened.opener = null; // sever the reference to us
+          } catch {
+            /* cross-origin after navigation — fine */
+          }
+        } else {
+          openBookingWindow(res.openUrl);
+        }
+      } else if (preOpened && !preOpened.closed) {
+        preOpened.close(); // no booking link came back — don't leave a blank tab
+      }
     } catch (err) {
+      if (preOpened && !preOpened.closed) preOpened.close();
       toast({
         title: "Assistant error",
         description: err instanceof Error ? err.message : undefined,
@@ -549,6 +570,24 @@ type Action = {
   label: string;
   href?: string;
 };
+
+/**
+ * Client-side guess of whether a message is a "book/buy this RIGHT NOW" request,
+ * used ONLY to decide whether to pre-open a tab within the click gesture (so
+ * pop-up blockers don't stop the real open). The server is the source of truth:
+ * if it doesn't return an openUrl, the pre-opened tab is closed again.
+ */
+function looksLikeBookNow(text: string): boolean {
+  const t = text.toLowerCase();
+  const wantsAction =
+    /\b(book|buy|purchase|order|reserve|get|open)\b/.test(t) ||
+    /\btickets?\b/.test(t);
+  const isUrgent =
+    /\b(now|right now|immediately|asap|straight ?away)\b/.test(t) ||
+    /\b(book|open|buy) it\b/.test(t) ||
+    /\blet'?s (go|book|buy)\b/.test(t);
+  return wantsAction && isUrgent;
+}
 
 function MessageBubble({
   message,
