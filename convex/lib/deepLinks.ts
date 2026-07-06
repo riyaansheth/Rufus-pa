@@ -52,10 +52,41 @@ export function bookMyShowCityUrl(city?: string): string {
 
 /** True for a BookMyShow URL that points at a specific movie/event/play page. */
 export function isBookMyShowEventUrl(url: string): boolean {
-  return /bookmyshow\.com\/(movies|events|plays|sports)\//i.test(url);
+  return (
+    isBookMyShowUrl(url) &&
+    (/bookmyshow\.com\/.*\b(movies|events|plays|sports)\//i.test(url) ||
+      /\bET\d{8}\b/i.test(url))
+  );
 }
 
 /** True for any BookMyShow URL. */
 export function isBookMyShowUrl(url: string): boolean {
-  return /(^|\.)bookmyshow\.com/i.test(url);
+  return /(^|\/|\.)bookmyshow\.com/i.test(url);
+}
+
+/** Extract BookMyShow's event code (e.g. ET00312345) from a URL, if present. */
+export function bmsEventCode(url: string): string | undefined {
+  return /\b(ET\d{8})\b/i.exec(url)?.[1]?.toUpperCase();
+}
+
+/**
+ * Deep-link straight to BookMyShow's SHOWTIME PICKER for a given date.
+ * BMS movie pages (`…/movies/{city}/{slug}/ET00xxxxxx`) have a stable sibling
+ * `…/movies/{city}/{slug}/buytickets/ET00xxxxxx/YYYYMMDD` that lists that day's
+ * shows — the closest a link can legally get to seat selection. Falls back to
+ * the movie page itself when the URL shape or date isn't available.
+ */
+export function bmsShowtimesUrl(movieUrl: string, yyyymmdd?: string): string {
+  const code = bmsEventCode(movieUrl);
+  if (!code || !yyyymmdd) return movieUrl;
+  try {
+    const u = new URL(movieUrl);
+    const parts = u.pathname.split("/").filter(Boolean);
+    const codeIdx = parts.findIndex((p) => /\bET\d{8}\b/i.test(p));
+    if (codeIdx < 1) return movieUrl;
+    const base = parts.slice(0, codeIdx).join("/");
+    return `${u.origin}/${base}/buytickets/${code}/${yyyymmdd}`;
+  } catch {
+    return movieUrl;
+  }
 }

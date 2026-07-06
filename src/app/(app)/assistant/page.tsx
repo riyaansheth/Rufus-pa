@@ -329,6 +329,18 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     const preOpened = looksLikeBookNow(content)
       ? window.open("about:blank", "_blank")
       : null;
+    if (preOpened) {
+      // Friendly interim content while the assistant resolves the real page.
+      try {
+        preOpened.document.write(
+          "<title>Rufuspa — opening booking page…</title>" +
+            "<body style='font-family:system-ui;display:grid;place-items:center;height:100vh;color:#666'>" +
+            "<p>Finding the booking page…</p></body>",
+        );
+      } catch {
+        /* non-fatal */
+      }
+    }
     setInput("");
     setPendingUserMessage(content);
     setSending(true);
@@ -346,12 +358,8 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
       // "Book now" → open the provider page immediately (human still checks out).
       if (res.openUrl) {
         if (preOpened && !preOpened.closed) {
-          preOpened.location.href = res.openUrl;
-          try {
-            preOpened.opener = null; // sever the reference to us
-          } catch {
-            /* cross-origin after navigation — fine */
-          }
+          // Plain top-level navigation — indistinguishable from typing the URL.
+          preOpened.location.replace(res.openUrl);
         } else {
           openBookingWindow(res.openUrl);
         }

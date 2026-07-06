@@ -12,6 +12,7 @@ import { toMs, todayWindowInTz } from "./lib/time";
 import {
   buildDeepLink,
   bookMyShowCityUrl,
+  bmsShowtimesUrl,
   isBookMyShowEventUrl,
   isBookMyShowUrl,
 } from "./lib/deepLinks";
@@ -42,7 +43,7 @@ CRITICAL SAFETY RULES — never violate these:
 - Never claim an action succeeded unless a tool call actually returned success.
 - Only ask for missing details when genuinely required; otherwise pick sensible defaults and proceed.
 
-BOOK NOW vs TRACK LATER: If the user wants to book/buy something RIGHT NOW (urgency words like "now", "book it", "right now", "immediately", "open it", "let's book"), call openBookingLink to open the provider page immediately — do NOT create a monitor for that. Only create a monitor (createAvailabilityMonitor) when they want to be ALERTED later or when bookings aren't open yet. Opening the page is fine; you still never select seats or complete payment/OTP — say so briefly.
+BOOK NOW vs TRACK LATER: If the user wants to book/buy something RIGHT NOW (urgency words like "now", "book it", "right now", "immediately", "open it", "let's book"), call openBookingLink to open the provider page immediately — do NOT create a monitor for that. When they name a day ("tomorrow", "Friday"), also pass date as YYYY-MM-DD (resolved in their timezone) so the link opens that day's showtimes directly. Only create a monitor (createAvailabilityMonitor) when they want to be ALERTED later or when bookings aren't open yet. Opening the page is fine; you still never select seats or complete payment/OTP — say so briefly.
 
 For movie/event ticket requests:
 - Always pass the BARE film/event name as searchQuery (e.g. "Obsession"), separate from the verbose title — this builds a booking deep link that opens the exact movie for the user's city (not just the provider's homepage). Include the user's city when mentioned (or ask once).
@@ -223,6 +224,11 @@ const tools: ChatCompletionTool[] = [
               "The bare movie/product/event name to open (e.g. 'Obsession'), without dates/seats/venue text.",
           },
           city: { type: "string", description: "User's city (for ticket bookings)" },
+          date: {
+            type: "string",
+            description:
+              "Show date as YYYY-MM-DD (resolve 'tomorrow'/'Friday' in the user's timezone). Opens that day's showtimes directly.",
+          },
           url: { type: "string", description: "An explicit URL, if the user gave one (wins)." },
         },
         required: ["type", "searchQuery"],
@@ -443,6 +449,7 @@ const schemas = {
     type: z.enum(["product", "movie_ticket", "event", "generic_url"]),
     searchQuery: z.string().min(1),
     city: z.string().optional(),
+    date: z.string().optional(),
     url: z.string().optional(),
   }),
   createPurchaseRequest: z.object({
@@ -571,19 +578,31 @@ async function resolveBookingUrl(
   query: string,
   city?: string,
   explicitUrl?: string,
+  isoDate?: string,
 ): Promise<string | undefined> {
   if (explicitUrl && explicitUrl.trim()) return explicitUrl.trim();
   if (kind === "movie_ticket" || kind === "event") {
-    const terms = [query, city, "book tickets BookMyShow showtimes"]
-      .filter(Boolean)
-      .join(" ");
-    const res = await runWebSearch(terms);
-    // Prefer a specific movie/event page; else any BookMyShow link.
-    const specific = res.sources.find((s) => isBookMyShowEventUrl(s.url));
-    if (specific) return specific.url;
-    const anyBms = res.sources.find((s) => isBookMyShowUrl(s.url));
-    if (anyBms) return anyBms.url;
-    return bookMyShowCityUrl(city);
+    // Ask for the URL explicitly — the answer text often carries it even when
+    // the citation list doesn't.
+    const res = await runWebSearch(
+      `Find the in.bookmyshow.com page for the ${
+        kind === "movie_ticket" ? "movie" : "event"
+      } "${query}"${city ? ` in ${city}` : ""}. Reply with the exact BookMyShow URL (it contains an ET code like ET00123456).`,
+    );
+    // Harvest candidates from BOTH the cited sources and any URLs in the answer.
+    const candidates = [
+      ...res.sources.map((s) => s.url),
+      ...(res.answer.match(/https?:\/\/[^\s)\]}"'<>]+/g) ?? []),
+    ].filter(isBookMyShowUrl);
+    // The user's date (YYYY-MM-DD, already resolved in their tz by the model)
+    // upgrades a movie page into that day's showtime picker.
+    const yyyymmdd =
+      isoDate && /^\d{4}-\d{2}-\d{2}/.test(isoDate)
+        ? isoDate.slice(0, 10).replace(/-/g, "")
+        : undefined;
+    const specific = candidates.find(isBookMyShowEventUrl);
+    if (specific) return bmsShowtimesUrl(specific, yyyymmdd);
+    return candidates[0] ?? bookMyShowCityUrl(city);
   }
   return buildDeepLink({ kind, title: query, query, city, url: explicitUrl });
 }
@@ -966,14 +985,14 @@ async function dispatchTool(
       }
       case "createAvailabilityMonitor": {
         const a = schemas.createAvailabilityMonitor.parse(parsed);
-        // Prepare the flow: land the human as close to booking as a link can.
-        const url = buildDeepLink({
-          kind: a.type,
-          title: a.title,
-          query: a.searchQuery,
-          url: a.url,
-          city: a.city,
-        });
+        // Prepare the flow: land the human as close to booking as a link can —
+        // for movies/events this resolves the ACTUAL BookMyShow page via search.
+        const url = await resolveBookingUrl(
+          a.type,
+          a.searchQuery ?? a.title,
+          a.city,
+          a.url,
+        );
         const conditions: Record<string, unknown> = {};
         if (a.priceBelow !== undefined) {
           conditions.priceBelow = a.priceBelow;
@@ -1001,9 +1020,15 @@ async function dispatchTool(
       }
       case "openBookingLink": {
         const a = schemas.openBookingLink.parse(parsed);
-        // Find the actual BookMyShow movie page via web search (falls back to the
-        // BMS city listing) so it opens the film, not a search engine.
-        const url = await resolveBookingUrl(a.type, a.searchQuery, a.city, a.url);
+        // Find the actual BookMyShow movie page via web search; with a date it
+        // deep-links straight to that day's showtime picker.
+        const url = await resolveBookingUrl(
+          a.type,
+          a.searchQuery,
+          a.city,
+          a.url,
+          a.date,
+        );
         if (!url) return { output: { error: "Could not build a booking link." } };
         return {
           output: {
