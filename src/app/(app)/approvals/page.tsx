@@ -37,10 +37,18 @@ function Approvals({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   const me = useQuery(api.users.me);
   const { toast } = useToast();
 
+  // The request currently being acted on — disables its buttons so a sensitive
+  // decision can't be double-submitted (which would otherwise error/confuse).
+  const [busyId, setBusyId] = React.useState<Id<"approvalRequests"> | null>(
+    null,
+  );
+
   const pending = all?.filter((a) => a.status === "pending") ?? [];
   const history = all?.filter((a) => a.status !== "pending") ?? [];
 
   async function onCancel(approvalId: Id<"approvalRequests">) {
+    if (busyId) return;
+    setBusyId(approvalId);
     try {
       await cancel({ workspaceId, approvalId });
       toast({ title: "Request cancelled" });
@@ -50,6 +58,8 @@ function Approvals({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         description: err instanceof Error ? err.message : undefined,
         variant: "error",
       });
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -57,6 +67,8 @@ function Approvals({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     approvalId: Id<"approvalRequests">,
     decision: "approved" | "rejected",
   ) {
+    if (busyId) return;
+    setBusyId(approvalId);
     try {
       await decide({ workspaceId, approvalId, decision });
       toast({
@@ -69,6 +81,8 @@ function Approvals({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         description: err instanceof Error ? err.message : undefined,
         variant: "error",
       });
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -152,13 +166,20 @@ function Approvals({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
                         <>
                           <Button
                             size="sm"
+                            disabled={busyId === a._id}
                             onClick={() => onDecide(a._id, "approved")}
                           >
-                            <Check /> Approve
+                            {busyId === a._id ? (
+                              <Loader2 className="animate-spin" />
+                            ) : (
+                              <Check />
+                            )}{" "}
+                            Approve
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
+                            disabled={busyId === a._id}
                             onClick={() => onDecide(a._id, "rejected")}
                           >
                             <X /> Reject
@@ -175,6 +196,7 @@ function Approvals({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
                           size="sm"
                           variant="ghost"
                           className="ml-auto"
+                          disabled={busyId === a._id}
                           onClick={() => onCancel(a._id)}
                         >
                           Cancel
