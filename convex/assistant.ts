@@ -26,6 +26,8 @@ You can: schedule calendar events, create reminders, create and track tasks, set
 
 You can also MANAGE existing items by name via the manage* tools: complete/reopen/cancel/delete/update tasks, cancel/reschedule reminders, edit calendar events (change their title, time, location, or description — use manageCalendarEvent with action "update" and only the fields that change; or reschedule/rename/delete), and pause/resume/delete monitors. Users refer to items loosely ("mark the vendor call as done") — pass their words as titleQuery. If the tool returns candidates, ask the user which one they meant; never guess between multiple matches. You cannot approve or reject approval requests — a human must decide those on the Approvals page; offer to point them there.
 
+MEMORY: You remember the user across conversations. Their profile (name, location, role) and remembered facts are provided to you each turn — use them and NEVER ask again for something you already know (e.g. don't ask where they live if their location is given). When the user shares a durable personal fact (where they live, a preference, their role, family, recurring context), call rememberFact to store it. If they tell you a profile detail changed ("I moved to Delhi", "I'm a PM now"), call updateProfile to correct it. Don't remember trivial one-off task details — only lasting facts.
+
 REAL-TIME KNOWLEDGE: You have LIVE web access via the webSearch tool. You are not limited to training data. Whenever a question depends on current, recent, or real-world facts — news, prices, weather, sports scores, stock/crypto quotes, product availability, schedules, "who/what/when is…", flight/travel info, anything that could have changed after your training cut-off, or anything you're not fully certain about — call webSearch FIRST and answer from the fresh results. Prefer searching over guessing. You can answer questions on ANY topic in the world this way. When you use search results, weave in the key facts and, when helpful, mention the source. Do not claim you lack internet access or real-time data — you have both.
 
 CRITICAL SAFETY RULES — never violate these:
@@ -67,6 +69,42 @@ const tools: ChatCompletionTool[] = [
           },
         },
         required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "rememberFact",
+      description:
+        "Store a durable personal fact about the user (where they live, a preference, their role, family, recurring context) so you never ask again. Use for lasting facts only, not one-off task details.",
+      parameters: {
+        type: "object",
+        properties: {
+          fact: {
+            type: "string",
+            description: "The fact to remember, in a concise sentence.",
+          },
+        },
+        required: ["fact"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "updateProfile",
+      description:
+        "Update the user's stored profile when they tell you a detail changed (moved city, changed role, wants to be called something else). Only include the fields that change.",
+      parameters: {
+        type: "object",
+        properties: {
+          displayName: { type: "string" },
+          city: { type: "string" },
+          country: { type: "string" },
+          jobTitle: { type: "string", description: "Role / occupation" },
+          about: { type: "string" },
+        },
       },
     },
   },
@@ -314,6 +352,16 @@ const schemas = {
   webSearch: z.object({
     query: z.string().min(1),
   }),
+  rememberFact: z.object({
+    fact: z.string().min(1),
+  }),
+  updateProfile: z.object({
+    displayName: z.string().optional(),
+    city: z.string().optional(),
+    country: z.string().optional(),
+    jobTitle: z.string().optional(),
+    about: z.string().optional(),
+  }),
   createTask: z.object({
     title: z.string().min(1),
     description: z.string().optional(),
@@ -538,10 +586,36 @@ export const sendMessage = action({
     } catch {
       // invalid tz → fall back to ISO/UTC
     }
+    // What we already KNOW about the user (profile + remembered facts), so the
+    // assistant never re-asks their name, city, role, etc.
+    const memories: Array<{ content: string }> = await ctx.runQuery(
+      api.memory.list,
+      {},
+    );
+    const profileLines: string[] = [];
+    if (me.displayName) profileLines.push(`Name: ${me.displayName}`);
+    if (me.city)
+      profileLines.push(
+        `Location: ${me.city}${me.country ? `, ${me.country}` : ""}`,
+      );
+    if (me.jobTitle) profileLines.push(`Role: ${me.jobTitle}`);
+    if (me.about) profileLines.push(`About: ${me.about}`);
+    const memoryLines = memories.map((m) => `- ${m.content}`);
+    const knownBlock =
+      profileLines.length || memoryLines.length
+        ? `\n\nWHAT YOU ALREADY KNOW ABOUT THIS USER — use it and do NOT ask for it again:\n${profileLines.join(
+            "\n",
+          )}${
+            memoryLines.length
+              ? `\nRemembered facts:\n${memoryLines.join("\n")}`
+              : ""
+          }`
+        : "";
+
     const messages: ChatCompletionMessageParam[] = [
       {
         role: "system",
-        content: `${SYSTEM_PROMPT}\n\nThe user's timezone is ${tz}. The current local time for the user is ${localNow}. Interpret all relative times (e.g. "tomorrow at 4pm", "Friday morning") in the user's timezone, and output every date/time argument as an ISO 8601 string that INCLUDES the timezone offset (e.g. 2026-07-06T16:00:00+05:30). Never output a datetime without an offset.`,
+        content: `${SYSTEM_PROMPT}\n\nThe user's timezone is ${tz}. The current local time for the user is ${localNow}. Interpret all relative times (e.g. "tomorrow at 4pm", "Friday morning") in the user's timezone, and output every date/time argument as an ISO 8601 string that INCLUDES the timezone offset (e.g. 2026-07-06T16:00:00+05:30). Never output a datetime without an offset.${knownBlock}`,
       },
       ...history
         .filter((m) => m.role === "user" || m.role === "assistant")
@@ -658,6 +732,28 @@ async function dispatchTool(
       case "webSearch": {
         const a = schemas.webSearch.parse(parsed);
         return { output: await runWebSearch(a.query) };
+      }
+      case "rememberFact": {
+        const a = schemas.rememberFact.parse(parsed);
+        await ctx.runMutation(api.memory.add, {
+          content: a.fact,
+          workspaceId,
+        });
+        return { output: { ok: true, remembered: a.fact } };
+      }
+      case "updateProfile": {
+        const a = schemas.updateProfile.parse(parsed);
+        if (
+          a.displayName === undefined &&
+          a.city === undefined &&
+          a.country === undefined &&
+          a.jobTitle === undefined &&
+          a.about === undefined
+        ) {
+          return { output: { error: "No profile fields to update." } };
+        }
+        await ctx.runMutation(api.users.patchProfile, a);
+        return { output: { ok: true, updated: a } };
       }
       case "createTask": {
         const a = schemas.createTask.parse(parsed);

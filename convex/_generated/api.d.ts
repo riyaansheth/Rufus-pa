@@ -29,6 +29,7 @@ import type * as lib_deepLinks from "../lib/deepLinks.js";
 import type * as lib_googleSync from "../lib/googleSync.js";
 import type * as lib_time from "../lib/time.js";
 import type * as memberships from "../memberships.js";
+import type * as memory from "../memory.js";
 import type * as monitors from "../monitors.js";
 import type * as notifications from "../notifications.js";
 import type * as reminders from "../reminders.js";
@@ -66,6 +67,7 @@ declare const fullApi: ApiFromModules<{
   "lib/googleSync": typeof lib_googleSync;
   "lib/time": typeof lib_time;
   memberships: typeof memberships;
+  memory: typeof memory;
   monitors: typeof monitors;
   notifications: typeof notifications;
   reminders: typeof reminders;

@@ -78,6 +78,15 @@ export default defineSchema({
     email: v.optional(v.string()),
     name: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    // --- Personal profile (collected in the compulsory onboarding window) so the
+    // assistant knows who/where the user is and stops re-asking. ---
+    displayName: v.optional(v.string()), // preferred name
+    city: v.optional(v.string()),
+    country: v.optional(v.string()),
+    jobTitle: v.optional(v.string()), // role / occupation
+    about: v.optional(v.string()), // free-form notes the user wants remembered
+    // Set once the required profile fields are filled; gates the app until then.
+    profileCompletedAt: v.optional(v.number()),
     // IANA timezone captured from the browser; used for the daily briefing hour.
     timezone: v.optional(v.string()),
     // Telegram delivery: chat id once linked, and the one-time code used to link.
@@ -92,6 +101,16 @@ export default defineSchema({
   })
     .index("by_clerkUser", ["clerkUserId"])
     .index("by_telegramLinkCode", ["telegramLinkCode"]),
+
+  // Personal, cross-workspace memory the assistant accumulates (e.g. "prefers
+  // morning meetings", "allergic to peanuts"). Keyed by the Clerk user — these
+  // are facts about the PERSON, not workspace data, so they follow the user.
+  userMemories: defineTable({
+    userId: v.string(), // clerkUserId
+    workspaceId: v.optional(v.id("workspaces")), // where it was captured (context)
+    content: v.string(),
+    createdAt: v.number(),
+  }).index("by_user", ["userId"]),
 
   workspaces: defineTable({
     name: v.string(),

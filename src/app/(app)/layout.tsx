@@ -1,8 +1,9 @@
 "use client";
 
-import { useConvexAuth } from "convex/react";
+import { useConvexAuth, useQuery } from "convex/react";
 import { UserButton } from "@clerk/nextjs";
 import { Loader2 } from "lucide-react";
+import { api } from "@convex/_generated/api";
 import { WorkspaceProvider, useWorkspace } from "@/components/workspace-provider";
 import { AppSidebar } from "@/components/app-sidebar";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
@@ -11,6 +12,7 @@ import { QuickCapture } from "@/components/quick-capture";
 import { GoogleAutoConnect } from "@/components/google-auto-connect";
 import { UserSync } from "@/components/user-sync";
 import { OnboardingCard } from "@/components/onboarding-card";
+import { ProfileSetup } from "@/components/profile-setup";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -27,9 +29,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 function Shell({ children }: { children: React.ReactNode }) {
   const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { workspaces, isLoading: wsLoading } = useWorkspace();
+  const me = useQuery(api.users.me, isAuthenticated ? {} : "skip");
 
-  if (authLoading || (isAuthenticated && wsLoading)) {
+  // Wait for auth, the workspace list, and the user profile before deciding.
+  if (authLoading || (isAuthenticated && (wsLoading || me === undefined))) {
     return <FullScreenLoader />;
+  }
+
+  // COMPULSORY profile step: every user completes their profile (name, city, …)
+  // before the app is shown, so the assistant already knows who they are.
+  if (isAuthenticated && me && !me.profileCompletedAt) {
+    return <ProfileSetup me={me} />;
   }
 
   // Signed in but no workspace yet → onboarding.

@@ -57,7 +57,56 @@ export const me = query({
       email: identity.email ?? user?.email,
       name: identity.name ?? user?.name,
       imageUrl: identity.pictureUrl ?? user?.imageUrl,
+      // Personal profile (populated by the compulsory onboarding window).
+      displayName: user?.displayName ?? null,
+      city: user?.city ?? null,
+      country: user?.country ?? null,
+      jobTitle: user?.jobTitle ?? null,
+      about: user?.about ?? null,
+      timezone: user?.timezone ?? null,
+      profileCompletedAt: user?.profileCompletedAt ?? null,
     };
+  },
+});
+
+/**
+ * Save the user's personal profile from the onboarding window (or Settings).
+ * Requires a name and city; marks the profile complete so the app un-gates. The
+ * assistant reads these fields so it never has to ask where the user lives, etc.
+ */
+export const updateProfile = mutation({
+  args: {
+    displayName: v.string(),
+    city: v.string(),
+    country: v.optional(v.string()),
+    jobTitle: v.optional(v.string()),
+    about: v.optional(v.string()),
+    timezone: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await requireIdentity(ctx);
+    // Ensure a row exists (first-login may beat the webhook/lazy sync).
+    const userId = await upsertUser(ctx, {
+      clerkUserId: identity.clerkUserId,
+      email: identity.email,
+      name: identity.name,
+      imageUrl: identity.imageUrl,
+    });
+    const displayName = args.displayName.trim();
+    const city = args.city.trim();
+    if (!displayName) throw new Error("Please enter your name.");
+    if (!city) throw new Error("Please enter your city.");
+    await ctx.db.patch(userId, {
+      displayName,
+      city,
+      country: args.country?.trim() || undefined,
+      jobTitle: args.jobTitle?.trim() || undefined,
+      about: args.about?.trim() || undefined,
+      timezone: args.timezone || undefined,
+      profileCompletedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    return userId;
   },
 });
 
@@ -77,6 +126,38 @@ export const syncCurrentUser = mutation({
     if (timezone) {
       await ctx.db.patch(userId, { timezone, updatedAt: Date.now() });
     }
+    return userId;
+  },
+});
+
+/**
+ * Partially update profile fields — used by the assistant when the user mentions
+ * a change ("I moved to Delhi", "I'm a designer now"). Only patches provided
+ * fields; never clears the profile-complete flag.
+ */
+export const patchProfile = mutation({
+  args: {
+    displayName: v.optional(v.string()),
+    city: v.optional(v.string()),
+    country: v.optional(v.string()),
+    jobTitle: v.optional(v.string()),
+    about: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await requireIdentity(ctx);
+    const userId = await upsertUser(ctx, {
+      clerkUserId: identity.clerkUserId,
+      email: identity.email,
+      name: identity.name,
+      imageUrl: identity.imageUrl,
+    });
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    if (args.displayName !== undefined) patch.displayName = args.displayName.trim();
+    if (args.city !== undefined) patch.city = args.city.trim();
+    if (args.country !== undefined) patch.country = args.country.trim() || undefined;
+    if (args.jobTitle !== undefined) patch.jobTitle = args.jobTitle.trim() || undefined;
+    if (args.about !== undefined) patch.about = args.about.trim() || undefined;
+    await ctx.db.patch(userId, patch);
     return userId;
   },
 });
