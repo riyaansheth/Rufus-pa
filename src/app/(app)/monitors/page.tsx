@@ -40,6 +40,13 @@ function Monitors({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   const removeFn = useMutation(api.monitors.remove);
   const { toast } = useToast();
 
+  // Deleting a monitor is irreversible, so confirm it (and disable while in flight).
+  const [pendingDelete, setPendingDelete] = React.useState<{
+    id: Id<"monitors">;
+    title: string;
+  } | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
+
   const withError = <T,>(p: Promise<T>) =>
     p.catch((err) =>
       toast({
@@ -50,8 +57,24 @@ function Monitors({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     );
   const setStatus = (args: Parameters<typeof setStatusFn>[0]) =>
     withError(setStatusFn(args));
-  const remove = (args: Parameters<typeof removeFn>[0]) =>
-    withError(removeFn(args));
+
+  async function confirmDelete() {
+    if (!pendingDelete || deleting) return;
+    setDeleting(true);
+    try {
+      await removeFn({ workspaceId, monitorId: pendingDelete.id });
+      toast({ title: "Monitor deleted", variant: "success" });
+      setPendingDelete(null);
+    } catch (err) {
+      toast({
+        title: "Could not delete monitor",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   return (
     <div>
@@ -148,7 +171,9 @@ function Monitors({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
                   variant="ghost"
                   size="icon"
                   aria-label="Delete monitor"
-                  onClick={() => remove({ workspaceId, monitorId: m._id })}
+                  onClick={() =>
+                    setPendingDelete({ id: m._id, title: m.title })
+                  }
                 >
                   <Trash2 className="text-muted-foreground" />
                 </Button>
@@ -163,6 +188,35 @@ function Monitors({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         onOpenChange={setOpen}
         workspaceId={workspaceId}
       />
+
+      <Dialog
+        open={!!pendingDelete}
+        onOpenChange={(o) => !o && !deleting && setPendingDelete(null)}
+      >
+        <DialogHeader title="Delete monitor?" />
+        <p className="text-sm text-muted-foreground">
+          This stops tracking
+          {pendingDelete ? ` “${pendingDelete.title}”` : " this monitor"} and
+          can&apos;t be undone.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setPendingDelete(null)}
+            disabled={deleting}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={confirmDelete}
+            disabled={deleting}
+          >
+            {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
+            Delete
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }
