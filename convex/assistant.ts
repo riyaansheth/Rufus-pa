@@ -725,9 +725,26 @@ export const sendMessage = action({
       break;
     }
 
+    // If the loop exhausted its tool budget without the model ever writing a
+    // final answer, force one no-tools completion so the user gets a real reply
+    // (e.g. a multi-search question) instead of a misleading canned message.
+    if (!reply) {
+      try {
+        const finalCompletion = await openai.chat.completions.create({
+          model,
+          messages,
+          tool_choice: "none",
+          ...modelParams,
+        } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
+        reply = finalCompletion.choices[0]?.message?.content ?? "";
+      } catch (err) {
+        console.error("assistant final-summary call failed:", err);
+      }
+    }
+
     if (!reply) {
       reply =
-        "I've recorded that, but I couldn't produce a final summary. Please check the relevant page.";
+        "I ran out of steps before I could finish that. Please try rephrasing, or check the relevant page.";
     }
 
     await ctx.runMutation(internal.assistantData.addMessage, {
@@ -764,7 +781,18 @@ async function dispatchTool(
     switch (name) {
       case "webSearch": {
         const a = schemas.webSearch.parse(parsed);
-        return { output: await runWebSearch(a.query) };
+        const result = await runWebSearch(a.query);
+        if (result.error) {
+          // Don't let the model invent a "current" answer when the live lookup
+          // failed — instruct it to be honest about the failure.
+          return {
+            output: {
+              error: result.error,
+              note: "Live web search failed. Tell the user you couldn't verify current information right now — do NOT fabricate an answer.",
+            },
+          };
+        }
+        return { output: result };
       }
       case "rememberFact": {
         const a = schemas.rememberFact.parse(parsed);

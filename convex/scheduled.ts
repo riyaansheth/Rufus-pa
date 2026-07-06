@@ -157,19 +157,29 @@ export const runMonitorChecks = internalAction({
       url?: string;
       conditions?: unknown;
     }> = await ctx.runQuery(internal.scheduled.listMonitorsDue, {});
+    let checked = 0;
+    let failed = 0;
     for (const m of due) {
-      const result = await monitorProvider.check({
-        type: m.type,
-        title: m.title,
-        url: m.url,
-        conditions: (m.conditions ?? undefined) as MonitorConditions | undefined,
-      });
-      await ctx.runMutation(internal.scheduled.applyMonitorCheck, {
-        monitorId: m._id,
-        result,
-      });
+      // Isolate each monitor: one provider/mutation error must not abort the
+      // rest of the sweep (an unattended cron should be resilient row-by-row).
+      try {
+        const result = await monitorProvider.check({
+          type: m.type,
+          title: m.title,
+          url: m.url,
+          conditions: (m.conditions ?? undefined) as MonitorConditions | undefined,
+        });
+        await ctx.runMutation(internal.scheduled.applyMonitorCheck, {
+          monitorId: m._id,
+          result,
+        });
+        checked++;
+      } catch (err) {
+        failed++;
+        console.error(`monitor check failed for ${m._id}:`, err);
+      }
     }
-    return { checked: due.length };
+    return { checked, failed };
   },
 });
 
@@ -189,6 +199,8 @@ export const sendDailyBriefings = internalMutation({
     let sent = 0;
 
     for (const user of users) {
+     // Isolate each user so one bad row doesn't abort briefings for everyone.
+     try {
       if (!user.briefingEnabled) continue;
       const tz = user.timezone ?? "UTC";
       const targetHour = user.briefingHour ?? 8;
@@ -284,6 +296,9 @@ export const sendDailyBriefings = internalMutation({
       }
       await ctx.db.patch(user._id, { lastBriefingSentAt: now });
       sent++;
+     } catch (err) {
+       console.error(`daily briefing failed for ${user.clerkUserId}:`, err);
+     }
     }
     return { sent };
   },
