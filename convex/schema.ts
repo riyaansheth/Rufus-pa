@@ -121,6 +121,8 @@ export default defineSchema({
     priority: priorityValidator,
     dueAt: v.optional(v.number()),
     assignedTo: v.optional(v.string()), // clerkUserId
+    // Google Calendar event mirroring this task's due date (when Google connected).
+    googleEventId: v.optional(v.string()),
     createdBy: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -136,6 +138,8 @@ export default defineSchema({
     message: v.optional(v.string()),
     remindAt: v.number(),
     status: reminderStatusValidator,
+    // Google Calendar event mirroring this reminder (when Google connected).
+    googleEventId: v.optional(v.string()),
     createdBy: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),

@@ -1,9 +1,18 @@
 import { v } from "convex/values";
-import { mutation, query, MutationCtx } from "./_generated/server";
+import {
+  internalMutation,
+  mutation,
+  query,
+  MutationCtx,
+} from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireWorkspaceAccess } from "./lib/auth";
 import { writeAuditLog } from "./lib/audit";
+import { scheduleGoogleSync } from "./lib/googleSync";
 import { reminderStatusValidator } from "./schema";
+
+// Reminders appear in Google Calendar as a 15-minute block at the remind time.
+const REMINDER_EVENT_DURATION_MS = 15 * 60 * 1000;
 
 export async function insertReminder(
   ctx: MutationCtx,
@@ -39,8 +48,28 @@ export async function insertReminder(
     entityId: reminderId,
     metadata: { title, remindAt: args.remindAt },
   });
+  // Auto-fill Google Calendar with the reminder slot (when connected).
+  await scheduleGoogleSync(ctx, {
+    workspaceId: args.workspaceId,
+    userId: actorUserId,
+    op: "create",
+    title: `Reminder: ${title}`,
+    description: args.message,
+    startAt: args.remindAt,
+    endAt: args.remindAt + REMINDER_EVENT_DURATION_MS,
+    writeBack: { table: "reminders", id: reminderId },
+  });
   return reminderId;
 }
+
+/** INTERNAL — store the Google event id created by the sync action. */
+export const setGoogleEventId = internalMutation({
+  args: { reminderId: v.id("reminders"), googleEventId: v.string() },
+  handler: async (ctx, { reminderId, googleEventId }) => {
+    const reminder = await ctx.db.get(reminderId);
+    if (reminder) await ctx.db.patch(reminderId, { googleEventId });
+  },
+});
 
 export const list = query({
   args: {
@@ -124,6 +153,19 @@ export const reschedule = mutation({
       entityId: reminderId,
       metadata: { rescheduledTo: remindAt },
     });
+    // Move (or create) the mirrored Google Calendar slot.
+    await scheduleGoogleSync(ctx, {
+      workspaceId,
+      userId: identity.clerkUserId,
+      op: reminder.googleEventId ? "update" : "create",
+      googleEventId: reminder.googleEventId,
+      title: `Reminder: ${reminder.title}`,
+      startAt: remindAt,
+      endAt: remindAt + REMINDER_EVENT_DURATION_MS,
+      writeBack: reminder.googleEventId
+        ? undefined
+        : { table: "reminders", id: reminderId },
+    });
   },
 });
 
@@ -137,8 +179,17 @@ export const cancel = mutation({
     }
     await ctx.db.patch(reminderId, {
       status: "cancelled",
+      googleEventId: undefined,
       updatedAt: Date.now(),
     });
+    if (reminder.googleEventId) {
+      await scheduleGoogleSync(ctx, {
+        workspaceId,
+        userId: identity.clerkUserId,
+        op: "delete",
+        googleEventId: reminder.googleEventId,
+      });
+    }
     await writeAuditLog(ctx, {
       workspaceId,
       actorUserId: identity.clerkUserId,

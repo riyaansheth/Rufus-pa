@@ -239,7 +239,7 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "manageCalendarEvent",
       description:
-        "Delete, reschedule, or rename an existing calendar event found by (partial) title. Rescheduling only updates the internal calendar; if the event was mirrored to Google, tell the user to adjust it there too.",
+        "Delete, reschedule, or rename an existing calendar event found by (partial) title. Changes propagate to the mirrored Google Calendar event automatically when Google is connected.",
       parameters: {
         type: "object",
         properties: {
@@ -823,7 +823,7 @@ async function dispatchTool(
               action: "delete",
               note:
                 event.source === "google"
-                  ? "This event was mirrored to Google Calendar — tell the user to also remove it there."
+                  ? "The mirrored Google Calendar event is being removed too."
                   : undefined,
             },
             action: {
@@ -854,7 +854,7 @@ async function dispatchTool(
             event: event.title,
             action: a.action,
             note: result.wasGoogleMirrored
-              ? "This event was mirrored to Google Calendar — the change applies to the internal calendar only; tell the user to update Google too."
+              ? "The mirrored Google Calendar event is being updated too."
               : undefined,
           },
           action: {

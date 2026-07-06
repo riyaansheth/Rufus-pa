@@ -1,9 +1,18 @@
 import { v } from "convex/values";
-import { mutation, query, MutationCtx } from "./_generated/server";
+import {
+  internalMutation,
+  mutation,
+  query,
+  MutationCtx,
+} from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireWorkspaceAccess } from "./lib/auth";
 import { writeAuditLog } from "./lib/audit";
+import { scheduleGoogleSync } from "./lib/googleSync";
 import { priorityValidator, taskStatusValidator } from "./schema";
+
+// Tasks with a due date appear in Google Calendar as a 30-minute block.
+const TASK_EVENT_DURATION_MS = 30 * 60 * 1000;
 
 /**
  * Shared insert used by both the public `create` mutation and the assistant's
@@ -45,8 +54,30 @@ export async function insertTask(
     entityId: taskId,
     metadata: { title },
   });
+  // Auto-fill Google Calendar: tasks with a due date become a calendar block.
+  if (args.dueAt) {
+    await scheduleGoogleSync(ctx, {
+      workspaceId: args.workspaceId,
+      userId: actorUserId,
+      op: "create",
+      title: `Task: ${title}`,
+      description: args.description,
+      startAt: args.dueAt,
+      endAt: args.dueAt + TASK_EVENT_DURATION_MS,
+      writeBack: { table: "tasks", id: taskId },
+    });
+  }
   return taskId;
 }
+
+/** INTERNAL — store the Google event id created by the sync action. */
+export const setGoogleEventId = internalMutation({
+  args: { taskId: v.id("tasks"), googleEventId: v.string() },
+  handler: async (ctx, { taskId, googleEventId }) => {
+    const task = await ctx.db.get(taskId);
+    if (task) await ctx.db.patch(taskId, { googleEventId });
+  },
+});
 
 export const list = query({
   args: {
@@ -160,6 +191,48 @@ export const update = mutation({
       entityId: args.taskId,
       metadata: { changes: Object.keys(patch).filter((k) => k !== "updatedAt") },
     });
+
+    // --- Keep the Google Calendar mirror in step with the task's state -------
+    const after = await ctx.db.get(args.taskId);
+    if (!after) return;
+    const isActive = after.status === "todo" || after.status === "in_progress";
+    const wantsEvent = isActive && after.dueAt !== undefined;
+    if (wantsEvent && !after.googleEventId) {
+      // Gained a due date (or was reopened) → create the calendar block.
+      await scheduleGoogleSync(ctx, {
+        workspaceId: args.workspaceId,
+        userId: identity.clerkUserId,
+        op: "create",
+        title: `Task: ${after.title}`,
+        description: after.description,
+        startAt: after.dueAt!,
+        endAt: after.dueAt! + TASK_EVENT_DURATION_MS,
+        writeBack: { table: "tasks", id: args.taskId },
+      });
+    } else if (!wantsEvent && after.googleEventId) {
+      // Completed/cancelled or due date removed → clear the calendar block.
+      await ctx.db.patch(args.taskId, { googleEventId: undefined });
+      await scheduleGoogleSync(ctx, {
+        workspaceId: args.workspaceId,
+        userId: identity.clerkUserId,
+        op: "delete",
+        googleEventId: after.googleEventId,
+      });
+    } else if (
+      wantsEvent &&
+      after.googleEventId &&
+      (args.title !== undefined || args.dueAt !== undefined)
+    ) {
+      await scheduleGoogleSync(ctx, {
+        workspaceId: args.workspaceId,
+        userId: identity.clerkUserId,
+        op: "update",
+        googleEventId: after.googleEventId,
+        title: `Task: ${after.title}`,
+        startAt: after.dueAt!,
+        endAt: after.dueAt! + TASK_EVENT_DURATION_MS,
+      });
+    }
   },
 });
 
@@ -172,6 +245,14 @@ export const remove = mutation({
       throw new Error("Task not found in this workspace.");
     }
     await ctx.db.delete(taskId);
+    if (task.googleEventId) {
+      await scheduleGoogleSync(ctx, {
+        workspaceId,
+        userId: identity.clerkUserId,
+        op: "delete",
+        googleEventId: task.googleEventId,
+      });
+    }
     await writeAuditLog(ctx, {
       workspaceId,
       actorUserId: identity.clerkUserId,

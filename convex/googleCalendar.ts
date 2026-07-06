@@ -4,9 +4,11 @@ import { google } from "googleapis";
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 import type {
   CalendarEventInput,
   CalendarProvider,
+  MutateEventResult,
   OAuthTokens,
   RemoteCalendarEvent,
 } from "./integrations/calendarProvider";
@@ -32,20 +34,14 @@ export class GoogleCalendarProvider implements CalendarProvider {
     return oauth2;
   }
 
-  async createEvent(
-    tokens: OAuthTokens,
-    input: CalendarEventInput,
-  ): Promise<{
-    event: RemoteCalendarEvent;
-    refreshed?: { accessToken: string; expiresAt?: number };
-  }> {
+  /** Authed client + a getter for any auto-refreshed access token. */
+  private authed(tokens: OAuthTokens) {
     const auth = this.client();
     auth.setCredentials({
       access_token: tokens.accessToken,
       refresh_token: tokens.refreshToken,
       expiry_date: tokens.expiresAt,
     });
-    // Capture an auto-refreshed access token so callers can persist it.
     let refreshed: { accessToken: string; expiresAt?: number } | undefined;
     auth.on("tokens", (t) => {
       if (t.access_token) {
@@ -55,6 +51,17 @@ export class GoogleCalendarProvider implements CalendarProvider {
         };
       }
     });
+    return { auth, getRefreshed: () => refreshed };
+  }
+
+  async createEvent(
+    tokens: OAuthTokens,
+    input: CalendarEventInput,
+  ): Promise<{
+    event: RemoteCalendarEvent;
+    refreshed?: { accessToken: string; expiresAt?: number };
+  }> {
+    const { auth, getRefreshed } = this.authed(tokens);
     const calendar = google.calendar({ version: "v3", auth });
     const res = await calendar.events.insert({
       calendarId: "primary",
@@ -75,8 +82,51 @@ export class GoogleCalendarProvider implements CalendarProvider {
         end: res.data.end?.dateTime ?? undefined,
         title: res.data.summary ?? undefined,
       },
-      refreshed,
+      refreshed: getRefreshed(),
     };
+  }
+
+  async updateEvent(
+    tokens: OAuthTokens,
+    externalId: string,
+    input: Partial<CalendarEventInput>,
+  ): Promise<MutateEventResult> {
+    const { auth, getRefreshed } = this.authed(tokens);
+    const calendar = google.calendar({ version: "v3", auth });
+    await calendar.events.patch({
+      calendarId: "primary",
+      eventId: externalId,
+      requestBody: {
+        ...(input.title !== undefined ? { summary: input.title } : {}),
+        ...(input.description !== undefined
+          ? { description: input.description }
+          : {}),
+        ...(input.location !== undefined ? { location: input.location } : {}),
+        ...(input.startAt !== undefined
+          ? { start: { dateTime: new Date(input.startAt).toISOString() } }
+          : {}),
+        ...(input.endAt !== undefined
+          ? { end: { dateTime: new Date(input.endAt).toISOString() } }
+          : {}),
+      },
+    });
+    return { refreshed: getRefreshed() };
+  }
+
+  async deleteEvent(
+    tokens: OAuthTokens,
+    externalId: string,
+  ): Promise<MutateEventResult> {
+    const { auth, getRefreshed } = this.authed(tokens);
+    const calendar = google.calendar({ version: "v3", auth });
+    try {
+      await calendar.events.delete({ calendarId: "primary", eventId: externalId });
+    } catch (err) {
+      // Already gone in Google (user deleted it there) — that's fine.
+      const code = (err as { code?: number }).code;
+      if (code !== 404 && code !== 410) throw err;
+    }
+    return { refreshed: getRefreshed() };
   }
 
   async listUpcoming(
@@ -159,5 +209,107 @@ export const createRemoteEvent = internalAction({
       });
     }
     return { externalId: event.externalId, htmlLink: event.htmlLink };
+  },
+});
+
+/**
+ * INTERNAL: one-shot Google Calendar sync used by task/reminder/event mutations
+ * (scheduled via ctx.scheduler so DB writes never block on the network).
+ *
+ * Best-effort by design: any Google failure is recorded on the connection
+ * (integration.failed) and never breaks the in-app record.
+ */
+export const syncItem = internalAction({
+  args: {
+    workspaceId: v.id("workspaces"),
+    userId: v.optional(v.string()),
+    op: v.union(v.literal("create"), v.literal("update"), v.literal("delete")),
+    googleEventId: v.optional(v.string()),
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    startAt: v.optional(v.number()),
+    endAt: v.optional(v.number()),
+    // Where to store the created Google event id.
+    writeBack: v.optional(
+      v.object({
+        table: v.union(v.literal("tasks"), v.literal("reminders")),
+        id: v.string(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const conn = await ctx.runQuery(
+      internal.calendarConnections.getConnectionInternal,
+      { workspaceId: args.workspaceId, userId: args.userId },
+    );
+    if (
+      !conn ||
+      conn.provider !== "google" ||
+      conn.status !== "connected" ||
+      !conn.accessToken
+    ) {
+      return { synced: false };
+    }
+    const tokens: OAuthTokens = {
+      accessToken: conn.accessToken,
+      refreshToken: conn.refreshToken ?? undefined,
+      expiresAt: conn.expiresAt ?? undefined,
+    };
+
+    try {
+      let refreshed: { accessToken: string; expiresAt?: number } | undefined;
+      if (args.op === "create") {
+        if (!args.title || args.startAt === undefined || args.endAt === undefined) {
+          return { synced: false };
+        }
+        const res = await provider.createEvent(tokens, {
+          title: args.title,
+          description: args.description,
+          startAt: args.startAt,
+          endAt: args.endAt,
+        });
+        refreshed = res.refreshed;
+        if (res.event.externalId && args.writeBack) {
+          if (args.writeBack.table === "tasks") {
+            await ctx.runMutation(internal.tasks.setGoogleEventId, {
+              taskId: args.writeBack.id as Id<"tasks">,
+              googleEventId: res.event.externalId,
+            });
+          } else {
+            await ctx.runMutation(internal.reminders.setGoogleEventId, {
+              reminderId: args.writeBack.id as Id<"reminders">,
+              googleEventId: res.event.externalId,
+            });
+          }
+        }
+      } else if (args.op === "update") {
+        if (!args.googleEventId) return { synced: false };
+        const res = await provider.updateEvent(tokens, args.googleEventId, {
+          title: args.title,
+          description: args.description,
+          startAt: args.startAt,
+          endAt: args.endAt,
+        });
+        refreshed = res.refreshed;
+      } else {
+        if (!args.googleEventId) return { synced: false };
+        const res = await provider.deleteEvent(tokens, args.googleEventId);
+        refreshed = res.refreshed;
+      }
+      if (refreshed?.accessToken) {
+        await ctx.runMutation(internal.calendarConnections.updateAccessToken, {
+          workspaceId: args.workspaceId,
+          accessToken: refreshed.accessToken,
+          expiresAt: refreshed.expiresAt,
+        });
+      }
+      return { synced: true };
+    } catch (err) {
+      await ctx.runMutation(internal.calendarConnections.recordFailure, {
+        workspaceId: args.workspaceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { synced: false };
+    }
   },
 });

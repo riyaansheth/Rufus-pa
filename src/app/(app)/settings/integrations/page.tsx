@@ -71,7 +71,9 @@ function Integrations({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
               <div>
                 <CardTitle className="text-base">Google Calendar</CardTitle>
                 <CardDescription>
-                  Create and sync events. Uses OAuth — we never see your password.
+                  Events, tasks with due dates, and reminders are automatically
+                  added to your Google Calendar — updates and deletions sync too.
+                  Uses OAuth; we never see your password.
                 </CardDescription>
               </div>
             </div>

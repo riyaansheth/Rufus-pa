@@ -10,6 +10,7 @@ import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { requireWorkspaceAccess } from "./lib/auth";
 import { writeAuditLog } from "./lib/audit";
+import { scheduleGoogleSync } from "./lib/googleSync";
 
 /**
  * Internal calendar events live in Convex and are the fallback when Google Calendar
@@ -145,9 +146,8 @@ export const createInternal = mutation({
 });
 
 /**
- * Update an event in the internal store (reschedule/rename). MVP limitation: does
- * NOT patch the mirrored Google event — callers should tell the user when the event
- * had `source === "google"` so they can adjust it in Google Calendar too.
+ * Update an event (reschedule/rename). When the event is mirrored to Google, the
+ * change is propagated there too (best-effort, via the scheduled sync action).
  */
 export const updateInternal = mutation({
   args: {
@@ -186,13 +186,25 @@ export const updateInternal = mutation({
         changes: Object.keys(patch).filter((k) => k !== "updatedAt"),
       },
     });
+    // Propagate the change to the mirrored Google event.
+    if (event.source === "google" && event.externalId) {
+      await scheduleGoogleSync(ctx, {
+        workspaceId,
+        userId: identity.clerkUserId,
+        op: "update",
+        googleEventId: event.externalId,
+        title: patchArgs.title?.trim(),
+        startAt: patchArgs.startAt,
+        endAt: patchArgs.endAt ?? (patchArgs.startAt !== undefined ? endAt : undefined),
+      });
+    }
     return { wasGoogleMirrored: event.source === "google" };
   },
 });
 
 /**
- * Delete a calendar event from the internal store. (For MVP this does not delete the
- * mirrored Google event; that would require a Node action + the connection tokens.)
+ * Delete a calendar event. When the event is mirrored to Google, the remote event
+ * is deleted too (best-effort, via the scheduled sync action).
  */
 export const remove = mutation({
   args: { workspaceId: v.id("workspaces"), eventId: v.id("calendarEvents") },
@@ -203,6 +215,14 @@ export const remove = mutation({
       throw new Error("Event not found in this workspace.");
     }
     await ctx.db.delete(eventId);
+    if (event.source === "google" && event.externalId) {
+      await scheduleGoogleSync(ctx, {
+        workspaceId,
+        userId: identity.clerkUserId,
+        op: "delete",
+        googleEventId: event.externalId,
+      });
+    }
     await writeAuditLog(ctx, {
       workspaceId,
       actorUserId: identity.clerkUserId,

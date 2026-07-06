@@ -98,6 +98,14 @@ it in `.env.local` too.
 
 Without Google configured, calendar events fall back to an internal Convex-stored calendar.
 
+**Auto-sync:** once connected, calendar events, **tasks with due dates** (30-min block), and
+**reminders** (15-min block) are automatically created in your Google Calendar — and updates,
+completions, cancellations, and deletions propagate too. Sync is best-effort and never blocks
+the in-app record; failures are recorded as `integration.failed` in the audit log.
+
+> Set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` on the **Convex
+> deployment too** (`npx convex env set ...`) — token refresh and the sync action run there.
+
 ---
 
 ## Environment variables

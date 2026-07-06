@@ -38,6 +38,11 @@ export type CreateEventResult = {
   refreshed?: { accessToken: string; expiresAt?: number };
 };
 
+export type MutateEventResult = {
+  /** A refreshed access token, if the provider auto-refreshed during the call. */
+  refreshed?: { accessToken: string; expiresAt?: number };
+};
+
 export interface CalendarProvider {
   readonly id: "google" | "microsoft";
   /** Create an event in the remote calendar and return its external id. */
@@ -45,6 +50,17 @@ export interface CalendarProvider {
     tokens: OAuthTokens,
     input: CalendarEventInput,
   ): Promise<CreateEventResult>;
+  /** Patch an existing remote event (title/time/description). */
+  updateEvent(
+    tokens: OAuthTokens,
+    externalId: string,
+    input: Partial<CalendarEventInput>,
+  ): Promise<MutateEventResult>;
+  /** Delete a remote event. Must tolerate already-deleted events. */
+  deleteEvent(
+    tokens: OAuthTokens,
+    externalId: string,
+  ): Promise<MutateEventResult>;
   /** List upcoming events from the remote calendar. */
   listUpcoming(
     tokens: OAuthTokens,
