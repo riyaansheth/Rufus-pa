@@ -108,6 +108,21 @@ export const applyMonitorCheck = internalMutation({
     // If (and only if) a real provider confirms the condition, prepare an approval
     // request — NEVER a purchase. The MVP manual provider never sets conditionMet.
     if (result.conditionMet && monitor.autoPrepareApproval) {
+      // Alert the person who set the monitor directly (in-app + Telegram), with
+      // the booking/product link right in the message.
+      await notify(ctx, {
+        workspaceId: monitor.workspaceId,
+        userId: monitor.createdBy,
+        title:
+          monitor.type === "movie_ticket" || monitor.type === "event"
+            ? `🎟️ ${monitor.title} — bookings look open!`
+            : `🔔 ${monitor.title} — condition met!`,
+        message: monitor.url
+          ? `Complete it yourself here (seats/payment/OTP are always yours):\n${monitor.url}`
+          : "Check the monitor for details.",
+        type: "monitor_alert",
+        href: "/monitors",
+      });
       const conditions = (monitor.conditions ?? {}) as MonitorConditions;
       await insertApprovalRequest(ctx, monitor.createdBy, {
         workspaceId: monitor.workspaceId,

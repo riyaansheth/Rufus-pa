@@ -9,6 +9,7 @@ import { action, ActionCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { toMs, todayWindowInTz } from "./lib/time";
+import { buildDeepLink } from "./lib/deepLinks";
 
 /**
  * The AI assistant.
@@ -31,6 +32,8 @@ CRITICAL SAFETY RULES — never violate these:
 - For anything involving money, purchases, or third-party bookings (Amazon, BookMyShow, etc.), you create an APPROVAL REQUEST via the createPurchaseRequest tool and/or a monitor — you never claim you bought or booked anything.
 - Never claim an action succeeded unless a tool call actually returned success.
 - Only ask for missing details when genuinely required; otherwise pick sensible defaults and proceed.
+
+For movie/event ticket requests: include the user's city in createAvailabilityMonitor when they mention it (or ask once if unknown); a booking deep link is generated automatically so they land one tap from seat selection when bookings open.
 
 When a request maps to a tool, call it. After acting, briefly confirm what you did and the clear next step. Example phrases:
 - "I created a calendar event for tomorrow at 5:00 PM."
@@ -104,7 +107,7 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "createAvailabilityMonitor",
       description:
-        "Track a product/movie/event/URL and alert when a condition is met. Does not scrape or purchase.",
+        "Track a product/movie/event/URL and alert when a condition is met. Does not scrape or purchase. If no URL is given, a booking/product deep link is generated automatically.",
       parameters: {
         type: "object",
         properties: {
@@ -114,6 +117,7 @@ const tools: ChatCompletionTool[] = [
           },
           title: { type: "string" },
           url: { type: "string" },
+          city: { type: "string", description: "User's city (for ticket bookings)" },
           priceBelow: { type: "number", description: "Alert when price drops below this" },
           currency: { type: "string" },
           note: { type: "string" },
@@ -304,6 +308,7 @@ const schemas = {
     type: z.enum(["product", "movie_ticket", "event", "generic_url"]),
     title: z.string().min(1),
     url: z.string().optional(),
+    city: z.string().optional(),
     priceBelow: z.number().optional(),
     currency: z.string().optional(),
     note: z.string().optional(),
@@ -629,18 +634,26 @@ async function dispatchTool(
       }
       case "createAvailabilityMonitor": {
         const a = schemas.createAvailabilityMonitor.parse(parsed);
-        const conditions =
-          a.priceBelow !== undefined
-            ? { priceBelow: a.priceBelow, currency: a.currency ?? "INR" }
-            : a.note
-              ? { note: a.note }
-              : undefined;
+        // Prepare the flow: land the human as close to booking as a link can.
+        const url = buildDeepLink({
+          kind: a.type,
+          title: a.title,
+          url: a.url,
+          city: a.city,
+        });
+        const conditions: Record<string, unknown> = {};
+        if (a.priceBelow !== undefined) {
+          conditions.priceBelow = a.priceBelow;
+          conditions.currency = a.currency ?? "INR";
+        }
+        if (a.city) conditions.city = a.city;
+        if (a.note) conditions.note = a.note;
         const id = await ctx.runMutation(api.monitors.create, {
           workspaceId,
           type: a.type,
           title: a.title,
-          url: a.url,
-          conditions,
+          url,
+          conditions: Object.keys(conditions).length ? conditions : undefined,
         });
         return {
           output: { ok: true, monitorId: id },
@@ -655,14 +668,21 @@ async function dispatchTool(
       }
       case "createPurchaseRequest": {
         const a = schemas.createPurchaseRequest.parse(parsed);
+        const kind = a.kind ?? "purchase_request";
+        // Attach a deep link so the approver lands one tap from checkout.
+        const url = buildDeepLink({
+          kind: kind === "ticket_booking_request" ? "movie_ticket" : "product",
+          title: a.title,
+          url: a.url,
+        });
         const id = await ctx.runMutation(api.approvals.create, {
           workspaceId,
-          type: a.kind ?? "purchase_request",
+          type: kind,
           title: a.title,
           description:
             a.description ??
             "Prepared by the assistant. Requires human approval before any checkout. The assistant will not complete payment, OTP, or booking.",
-          payload: a.url ? { url: a.url } : undefined,
+          payload: url ? { url } : undefined,
           amount: a.amount,
           currency: a.currency,
         });

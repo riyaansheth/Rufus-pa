@@ -53,7 +53,12 @@ export async function insertApprovalRequest(
     metadata: { type: args.type, title, amount: args.amount },
   });
 
-  // Notify everyone who can approve (owner/admin/approver).
+  // Notify everyone who can approve (owner/admin/approver). Include the deep
+  // link in the message so Telegram recipients land one tap from checkout.
+  const payloadUrl =
+    args.payload && typeof args.payload === "object" && "url" in args.payload
+      ? String((args.payload as { url: unknown }).url)
+      : undefined;
   const members = await ctx.db
     .query("memberships")
     .withIndex("by_workspace", (q) => q.eq("workspaceId", args.workspaceId))
@@ -64,7 +69,7 @@ export async function insertApprovalRequest(
         workspaceId: args.workspaceId,
         userId: m.userId,
         title: "Approval needed",
-        message: title,
+        message: payloadUrl ? `${title}\n${payloadUrl}` : title,
         type: "approval_request",
         href: "/approvals",
       });
