@@ -80,13 +80,18 @@ export default defineSchema({
     imageUrl: v.optional(v.string()),
     // IANA timezone captured from the browser; used for the daily briefing hour.
     timezone: v.optional(v.string()),
+    // Telegram delivery: chat id once linked, and the one-time code used to link.
+    telegramChatId: v.optional(v.string()),
+    telegramLinkCode: v.optional(v.string()),
     // Proactive daily-briefing preferences (in-app notification each morning).
     briefingEnabled: v.optional(v.boolean()),
     briefingHour: v.optional(v.number()), // local hour 0-23, default 8
     lastBriefingSentAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_clerkUser", ["clerkUserId"]),
+  })
+    .index("by_clerkUser", ["clerkUserId"])
+    .index("by_telegramLinkCode", ["telegramLinkCode"]),
 
   workspaces: defineTable({
     name: v.string(),

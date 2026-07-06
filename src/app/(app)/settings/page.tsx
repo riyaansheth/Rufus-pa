@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
@@ -13,6 +14,8 @@ import {
   RefreshCw,
   UserPlus,
   Sunrise,
+  Send,
+  Loader2,
 } from "lucide-react";
 import { PageHeader, RequireWorkspace } from "@/components/page-shell";
 import { useWorkspace } from "@/components/workspace-provider";
@@ -75,6 +78,8 @@ function SettingsView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         </Card>
 
         <DailyBriefingCard />
+
+        <TelegramCard />
 
         {isAdmin ? (
           <Card>
@@ -307,6 +312,106 @@ function DailyBriefingCard() {
                 ))}
               </Select>
             </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TelegramCard() {
+  const status = useQuery(api.telegram.status);
+  const generate = useMutation(api.telegram.generateLinkCode);
+  const unlink = useMutation(api.telegram.unlink);
+  const { toast } = useToast();
+  const [busy, setBusy] = React.useState(false);
+
+  async function onConnect() {
+    setBusy(true);
+    try {
+      const code = await generate();
+      // Deep link auto-sends "/start <code>" when the bot username is known.
+      if (status?.botUsername) {
+        window.open(
+          `https://t.me/${status.botUsername}?start=${code}`,
+          "_blank",
+          "noopener",
+        );
+      }
+      toast({
+        title: "Link code ready",
+        description: status?.botUsername
+          ? "Telegram opened — tap Start in the chat to finish linking."
+          : `Open your bot in Telegram and send: /start ${code}`,
+        variant: "success",
+      });
+    } catch (err) {
+      toast({
+        title: "Could not start linking",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-3">
+        <div>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Send className="size-4" /> Telegram notifications
+          </CardTitle>
+          <CardDescription>
+            Get reminders, approval requests, daily briefings, and monitor alerts
+            in Telegram too.
+          </CardDescription>
+        </div>
+        {!status ? null : status.linked ? (
+          <Badge variant="success">Linked</Badge>
+        ) : (
+          <Badge variant="secondary">Not linked</Badge>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {!status ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : !status.configured ? (
+          <p className="text-sm text-muted-foreground">
+            Telegram is not configured yet (TELEGRAM_BOT_TOKEN missing on the
+            server). Ask your admin to set up the bot.
+          </p>
+        ) : status.linked ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              await unlink();
+              toast({ title: "Telegram unlinked" });
+            }}
+          >
+            Disconnect
+          </Button>
+        ) : (
+          <>
+            <Button size="sm" onClick={onConnect} disabled={busy}>
+              {busy ? <Loader2 className="animate-spin" /> : <Send />}
+              Connect Telegram
+            </Button>
+            {status.pendingCode ? (
+              <p className="text-xs text-muted-foreground">
+                Pending code:{" "}
+                <code className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                  {status.pendingCode}
+                </code>{" "}
+                — send{" "}
+                <code className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                  /start {status.pendingCode}
+                </code>{" "}
+                to the bot if the deep link didn&apos;t open.
+              </p>
+            ) : null}
           </>
         )}
       </CardContent>

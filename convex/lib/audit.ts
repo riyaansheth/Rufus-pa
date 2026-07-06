@@ -1,5 +1,6 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
+import { internal } from "../_generated/api";
 
 /**
  * Canonical audit-log actions. Keeping these as a closed set makes the audit trail
@@ -56,7 +57,10 @@ export async function writeAuditLog(
   });
 }
 
-/** Create an in-app notification (MVP delivery channel). */
+/**
+ * Deliver a notification: always in-app, plus Telegram when the recipient has
+ * linked the bot (reminders, approvals, briefings, monitor alerts — everything).
+ */
 export async function notify(
   ctx: MutationCtx,
   args: {
@@ -78,4 +82,19 @@ export async function notify(
     read: false,
     createdAt: Date.now(),
   });
+
+  // Telegram fan-out (best-effort, scheduled so the mutation never blocks on it).
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerkUser", (q) => q.eq("clerkUserId", args.userId))
+    .unique();
+  if (user?.telegramChatId) {
+    const text = args.message
+      ? `${args.title}\n${args.message}`
+      : args.title;
+    await ctx.scheduler.runAfter(0, internal.telegram.send, {
+      chatId: user.telegramChatId,
+      text,
+    });
+  }
 }

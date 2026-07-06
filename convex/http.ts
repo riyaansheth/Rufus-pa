@@ -62,4 +62,59 @@ http.route({
   }),
 });
 
+/**
+ * Telegram bot webhook. Register once via `telegram:registerWebhook`. Verified
+ * with the secret token Telegram echoes back on every update. Handles ONLY the
+ * /start linking handshake — the bot is a delivery channel, not a command surface.
+ */
+http.route({
+  path: "/telegram-webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (!secret) return new Response("Not configured", { status: 501 });
+    if (request.headers.get("x-telegram-bot-api-secret-token") !== secret) {
+      return new Response("Forbidden", { status: 403 });
+    }
+    let update: {
+      message?: { chat?: { id?: number }; text?: string };
+    };
+    try {
+      update = (await request.json()) as typeof update;
+    } catch {
+      return new Response("Bad request", { status: 400 });
+    }
+    const chatId = update.message?.chat?.id;
+    const text = update.message?.text?.trim() ?? "";
+    // Always 200 so Telegram doesn't retry storms; reply via sendMessage.
+    if (!chatId) return new Response("ok", { status: 200 });
+
+    let reply: string | null = null;
+    const startMatch = text.match(/^\/start(?:\s+(\S+))?/);
+    if (startMatch) {
+      const code = startMatch[1];
+      if (!code) {
+        reply =
+          "Hi! To link this chat to your Rufuspa account, open Rufuspa → Settings → Telegram and tap the link (or send /start <code>).";
+      } else {
+        const result = await ctx.runMutation(internal.telegram.linkFromWebhook, {
+          code,
+          chatId: String(chatId),
+        });
+        reply = result.reply;
+      }
+    } else if (text) {
+      reply =
+        "This bot delivers your Rufuspa notifications (reminders, approvals, briefings). Manage everything in the web app.";
+    }
+    if (reply) {
+      await ctx.runAction(internal.telegram.send, {
+        chatId: String(chatId),
+        text: reply,
+      });
+    }
+    return new Response("ok", { status: 200 });
+  }),
+});
+
 export default http;
