@@ -19,6 +19,7 @@ export async function scheduleGoogleSync(
     googleEventId?: string;
     title?: string;
     description?: string;
+    location?: string;
     startAt?: number;
     endAt?: number;
     writeBack?: { table: "tasks" | "reminders"; id: string };

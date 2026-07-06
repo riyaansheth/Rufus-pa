@@ -61,9 +61,12 @@ export interface CalendarProvider {
     tokens: OAuthTokens,
     externalId: string,
   ): Promise<MutateEventResult>;
-  /** List upcoming events from the remote calendar. */
+  /**
+   * List events from the remote calendar. Defaults to upcoming events; pass
+   * timeMin/timeMax (epoch ms) to fetch an explicit window (e.g. a month grid).
+   */
   listUpcoming(
     tokens: OAuthTokens,
-    opts?: { maxResults?: number },
+    opts?: { maxResults?: number; timeMin?: number; timeMax?: number },
   ): Promise<RemoteCalendarEvent[]>;
 }

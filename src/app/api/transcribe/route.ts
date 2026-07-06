@@ -42,9 +42,14 @@ export async function POST(req: NextRequest) {
             ? "wav"
             : "webm";
     const file = new File([audio], `recording.${ext}`, { type: mime });
+    // Pin the spoken language so short utterances (e.g. a single word like
+    // "Mumbai") aren't mis-detected and transcribed into another script.
+    // Override with OPENAI_TRANSCRIBE_LANGUAGE (ISO-639-1, e.g. "hi", "es").
+    const language = process.env.OPENAI_TRANSCRIBE_LANGUAGE || "en";
     const result = await openai.audio.transcriptions.create({
       file,
       model,
+      language,
     });
     return NextResponse.json({ text: result.text });
   } catch (err) {

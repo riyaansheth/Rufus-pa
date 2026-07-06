@@ -131,7 +131,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
 
   async listUpcoming(
     tokens: OAuthTokens,
-    opts?: { maxResults?: number },
+    opts?: { maxResults?: number; timeMin?: number; timeMax?: number },
   ): Promise<RemoteCalendarEvent[]> {
     const auth = this.client();
     auth.setCredentials({
@@ -142,7 +142,10 @@ export class GoogleCalendarProvider implements CalendarProvider {
     const calendar = google.calendar({ version: "v3", auth });
     const res = await calendar.events.list({
       calendarId: "primary",
-      timeMin: new Date().toISOString(),
+      timeMin: new Date(opts?.timeMin ?? Date.now()).toISOString(),
+      ...(opts?.timeMax
+        ? { timeMax: new Date(opts.timeMax).toISOString() }
+        : {}),
       singleEvents: true,
       orderBy: "startTime",
       maxResults: opts?.maxResults ?? 20,
@@ -276,6 +279,7 @@ export const syncItem = internalAction({
     googleEventId: v.optional(v.string()),
     title: v.optional(v.string()),
     description: v.optional(v.string()),
+    location: v.optional(v.string()),
     startAt: v.optional(v.number()),
     endAt: v.optional(v.number()),
     // Where to store the created Google event id.
@@ -328,6 +332,7 @@ export const syncItem = internalAction({
         const res = await provider.updateEvent(tokens, args.googleEventId, {
           title: args.title,
           description: args.description,
+          location: args.location,
           startAt: args.startAt,
           endAt: args.endAt,
         });
@@ -361,7 +366,14 @@ export const syncItem = internalAction({
  * calendar alongside internal events). Returns no tokens — event data only.
  */
 export const listGoogleEvents = action({
-  args: { workspaceId: v.id("workspaces"), maxResults: v.optional(v.number()) },
+  args: {
+    workspaceId: v.id("workspaces"),
+    maxResults: v.optional(v.number()),
+    // Optional explicit window (epoch ms) so the calendar grid can fetch a
+    // whole month, including days earlier this month.
+    timeMin: v.optional(v.number()),
+    timeMax: v.optional(v.number()),
+  },
   handler: async (
     ctx,
     args,
@@ -392,7 +404,9 @@ export const listGoogleEvents = action({
     if (!tokens) return { connected: false, events: [] };
     try {
       const events = await provider.listUpcoming(tokens, {
-        maxResults: Math.min(args.maxResults ?? 30, 100),
+        maxResults: Math.min(args.maxResults ?? 30, 250),
+        timeMin: args.timeMin,
+        timeMax: args.timeMax,
       });
       return { connected: true, events };
     } catch (err) {

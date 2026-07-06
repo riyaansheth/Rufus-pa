@@ -24,7 +24,9 @@ const SYSTEM_PROMPT = `You are Rufuspa, a careful, professional AI executive ass
 
 You can: schedule calendar events, create reminders, create and track tasks, set up availability monitors (for products, movie tickets, events, or URLs), prepare purchase/booking approval requests, and answer questions about the user's day.
 
-You can also MANAGE existing items by name via the manage* tools: complete/reopen/cancel/delete/update tasks, cancel/reschedule reminders, delete/reschedule/rename calendar events, and pause/resume/delete monitors. Users refer to items loosely ("mark the vendor call as done") — pass their words as titleQuery. If the tool returns candidates, ask the user which one they meant; never guess between multiple matches. You cannot approve or reject approval requests — a human must decide those on the Approvals page; offer to point them there.
+You can also MANAGE existing items by name via the manage* tools: complete/reopen/cancel/delete/update tasks, cancel/reschedule reminders, edit calendar events (change their title, time, location, or description — use manageCalendarEvent with action "update" and only the fields that change; or reschedule/rename/delete), and pause/resume/delete monitors. Users refer to items loosely ("mark the vendor call as done") — pass their words as titleQuery. If the tool returns candidates, ask the user which one they meant; never guess between multiple matches. You cannot approve or reject approval requests — a human must decide those on the Approvals page; offer to point them there.
+
+REAL-TIME KNOWLEDGE: You have LIVE web access via the webSearch tool. You are not limited to training data. Whenever a question depends on current, recent, or real-world facts — news, prices, weather, sports scores, stock/crypto quotes, product availability, schedules, "who/what/when is…", flight/travel info, anything that could have changed after your training cut-off, or anything you're not fully certain about — call webSearch FIRST and answer from the fresh results. Prefer searching over guessing. You can answer questions on ANY topic in the world this way. When you use search results, weave in the key facts and, when helpful, mention the source. Do not claim you lack internet access or real-time data — you have both.
 
 CRITICAL SAFETY RULES — never violate these:
 - You are a SUPERVISED assistant, not an auto-purchase bot.
@@ -49,6 +51,25 @@ Style: your replies may be read aloud by text-to-speech. Lead with ONE short spo
 // --- Tool schemas (surfaced to OpenAI) ------------------------------------
 
 const tools: ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "webSearch",
+      description:
+        "Search the live web for current, real-time, or real-world information on ANY topic (news, prices, weather, sports, stocks/crypto, schedules, facts, people, products, travel, etc.). Use this whenever an answer depends on up-to-date or post-training-cutoff information, or when you are unsure. Returns a synthesized answer with sources.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description:
+              "A focused natural-language search query capturing what to find out.",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -243,15 +264,20 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "manageCalendarEvent",
       description:
-        "Delete, reschedule, or rename an existing calendar event found by (partial) title. Changes propagate to the mirrored Google Calendar event automatically when Google is connected.",
+        "Edit or remove an existing calendar event found by (partial) title. Use action 'update' to change ANY combination of title, time, location, and/or description in one call (only include the fields that change). 'reschedule' changes only the time, 'rename' only the title, 'delete' removes it. Changes propagate to the mirrored Google Calendar event automatically when Google is connected.",
       parameters: {
         type: "object",
         properties: {
           titleQuery: { type: "string" },
-          action: { type: "string", enum: ["delete", "reschedule", "rename"] },
+          action: {
+            type: "string",
+            enum: ["update", "delete", "reschedule", "rename"],
+          },
           startAt: { type: "string", description: "ISO 8601 new start" },
-          endAt: { type: "string", description: "ISO 8601 new end (optional; defaults to +1h from start)" },
-          newTitle: { type: "string" },
+          endAt: { type: "string", description: "ISO 8601 new end (optional; defaults to keeping the event's current duration)" },
+          newTitle: { type: "string", description: "New event title" },
+          location: { type: "string", description: "New location" },
+          description: { type: "string", description: "New description/notes" },
         },
         required: ["titleQuery", "action"],
       },
@@ -285,6 +311,9 @@ type ActionDescriptor = {
 
 // Zod validation for each tool's arguments (defense against malformed model output).
 const schemas = {
+  webSearch: z.object({
+    query: z.string().min(1),
+  }),
   createTask: z.object({
     title: z.string().min(1),
     description: z.string().optional(),
@@ -336,10 +365,12 @@ const schemas = {
   }),
   manageCalendarEvent: z.object({
     titleQuery: z.string().min(1),
-    action: z.enum(["delete", "reschedule", "rename"]),
+    action: z.enum(["update", "delete", "reschedule", "rename"]),
     startAt: z.string().optional(),
     endAt: z.string().optional(),
     newTitle: z.string().optional(),
+    location: z.string().optional(),
+    description: z.string().optional(),
   }),
   manageMonitor: z.object({
     titleQuery: z.string().min(1),
@@ -373,6 +404,57 @@ function ambiguousOutput(kind: string, query: string, candidates: { title: strin
     error: `Multiple ${kind}s match "${query}" — ask the user which one.`,
     candidates: candidates.map((c) => c.title),
   };
+}
+
+/**
+ * Live web search via OpenAI's hosted web-search tool (Responses API). Gives the
+ * assistant real-time, up-to-date knowledge on any topic without a third-party
+ * search provider — it reuses the same OPENAI_API_KEY. Returns a synthesized
+ * answer plus the source URLs the model cited.
+ */
+async function runWebSearch(
+  query: string,
+): Promise<{ answer: string; sources: { title?: string; url: string }[]; error?: string }> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return { answer: "", sources: [], error: "Web search not configured." };
+  const model = process.env.OPENAI_SEARCH_MODEL || "gpt-4o-mini";
+  // web_search_preview is the widely-available hosted tool for the gpt-4o family;
+  // override via OPENAI_WEB_SEARCH_TOOL if your account exposes a different name.
+  const toolType = process.env.OPENAI_WEB_SEARCH_TOOL || "web_search_preview";
+  try {
+    const openai = new OpenAI({ apiKey });
+    const response = await openai.responses.create({
+      model,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tools: [{ type: toolType } as any],
+      input: query,
+    });
+    const answer = (response.output_text ?? "").trim();
+    // Collect any url_citation annotations the model attached to its answer.
+    const sources: { title?: string; url: string }[] = [];
+    const seen = new Set<string>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const item of ((response as any).output ?? []) as any[]) {
+      for (const content of (item?.content ?? []) as any[]) {
+        for (const ann of (content?.annotations ?? []) as any[]) {
+          if (ann?.type === "url_citation" && ann.url && !seen.has(ann.url)) {
+            seen.add(ann.url);
+            sources.push({ title: ann.title, url: ann.url });
+          }
+        }
+      }
+    }
+    if (!answer && sources.length === 0) {
+      return { answer: "", sources: [], error: "No results found." };
+    }
+    return { answer, sources };
+  } catch (err) {
+    return {
+      answer: "",
+      sources: [],
+      error: err instanceof Error ? err.message : "Web search failed.",
+    };
+  }
 }
 
 export const sendMessage = action({
@@ -470,7 +552,18 @@ export const sendMessage = action({
     ];
 
     const openai = new OpenAI({ apiKey });
-    const model = process.env.OPENAI_ASSISTANT_MODEL || "gpt-4o-mini";
+    const model = process.env.OPENAI_ASSISTANT_MODEL || "gpt-5";
+    // GPT-5 / reasoning models (o-series) only accept the default temperature (1);
+    // sending a custom value 400s. Older chat models keep the low-variance setting.
+    const isReasoningModel = /^(gpt-5|o\d)/.test(model);
+    // SPEED: GPT-5 defaults to heavy "thinking" before every reply, which is far
+    // too slow for a quick scheduling assistant. Run it at MINIMAL reasoning effort
+    // and LOW verbosity so it answers fast while staying GPT-5. Dial up with
+    // OPENAI_REASONING_EFFORT (minimal|low|medium|high) if you want deeper reasoning.
+    const reasoningEffort = process.env.OPENAI_REASONING_EFFORT || "minimal";
+    const modelParams: Record<string, unknown> = isReasoningModel
+      ? { reasoning_effort: reasoningEffort, verbosity: "low" }
+      : { temperature: 0.2 };
     const collectedActions: ActionDescriptor[] = [];
 
     let reply = "";
@@ -481,8 +574,8 @@ export const sendMessage = action({
         messages,
         tools,
         tool_choice: "auto",
-        temperature: 0.2,
-      });
+        ...modelParams,
+      } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
       const choice = completion.choices[0]?.message;
       if (!choice) break;
 
@@ -562,6 +655,10 @@ async function dispatchTool(
 
   try {
     switch (name) {
+      case "webSearch": {
+        const a = schemas.webSearch.parse(parsed);
+        return { output: await runWebSearch(a.query) };
+      }
       case "createTask": {
         const a = schemas.createTask.parse(parsed);
         const id = await ctx.runMutation(api.tasks.create, {
@@ -858,16 +955,38 @@ async function dispatchTool(
         if (a.action === "reschedule" && !startAt) {
           return { output: { error: "Reschedule needs a valid startAt time." } };
         }
+        // Keep the event's current duration if a new start is given without a new end.
         const endAt =
           toMs(a.endAt, tz) ??
           (startAt ? startAt + (event.endAt - event.startAt) : undefined);
-        const result = await ctx.runMutation(api.calendar.updateInternal, {
+        // Which fields this action is allowed to change.
+        const wantTitle = a.action === "rename" || a.action === "update";
+        const wantTimes = a.action === "reschedule" || a.action === "update";
+        const wantMeta = a.action === "update";
+        const patch = {
           workspaceId,
           eventId: event._id,
-          title: a.action === "rename" ? a.newTitle : undefined,
-          startAt: a.action === "reschedule" ? startAt : undefined,
-          endAt: a.action === "reschedule" ? endAt : undefined,
-        });
+          title: wantTitle ? a.newTitle : undefined,
+          startAt: wantTimes ? startAt ?? undefined : undefined,
+          endAt: wantTimes ? endAt ?? undefined : undefined,
+          location: wantMeta ? a.location : undefined,
+          description: wantMeta ? a.description : undefined,
+        };
+        if (
+          patch.title === undefined &&
+          patch.startAt === undefined &&
+          patch.endAt === undefined &&
+          patch.location === undefined &&
+          patch.description === undefined
+        ) {
+          return {
+            output: {
+              error:
+                "Nothing to change — specify a new title, time, location, or description.",
+            },
+          };
+        }
+        const result = await ctx.runMutation(api.calendar.updateInternal, patch);
         return {
           output: {
             ok: true,

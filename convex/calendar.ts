@@ -154,6 +154,7 @@ export const updateInternal = mutation({
     workspaceId: v.id("workspaces"),
     eventId: v.id("calendarEvents"),
     title: v.optional(v.string()),
+    description: v.optional(v.string()),
     startAt: v.optional(v.number()),
     endAt: v.optional(v.number()),
     location: v.optional(v.string()),
@@ -171,6 +172,8 @@ export const updateInternal = mutation({
     }
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (patchArgs.title !== undefined) patch.title = patchArgs.title.trim();
+    if (patchArgs.description !== undefined)
+      patch.description = patchArgs.description.trim() || undefined;
     if (patchArgs.startAt !== undefined) patch.startAt = patchArgs.startAt;
     if (patchArgs.endAt !== undefined) patch.endAt = patchArgs.endAt;
     if (patchArgs.location !== undefined) patch.location = patchArgs.location;
@@ -194,6 +197,8 @@ export const updateInternal = mutation({
         op: "update",
         googleEventId: event.externalId,
         title: patchArgs.title?.trim(),
+        description: patchArgs.description?.trim(),
+        location: patchArgs.location,
         startAt: patchArgs.startAt,
         endAt: patchArgs.endAt ?? (patchArgs.startAt !== undefined ? endAt : undefined),
       });
