@@ -33,3 +33,9 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# local agent/session tooling (not part of the product)
+.claude/
+.agents/
+AGENTS.md
+skills-lock.json
