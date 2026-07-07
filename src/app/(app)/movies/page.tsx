@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { preopenTab, navigateNoReferrer, closeTab } from "@/lib/open-external";
 
 export default function MoviesPage() {
   return (
@@ -76,7 +77,7 @@ function Movies({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     if (bookingTitle) return;
     setBookingTitle(title);
     // Open a placeholder tab within the click so pop-up blockers don't stop it.
-    const pre = window.open("about:blank", "_blank");
+    const pre = preopenTab();
     try {
       const { url } = await getBookingLink({
         workspaceId,
@@ -84,14 +85,13 @@ function Movies({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         city: me?.city ?? undefined,
       });
       if (url) {
-        if (pre && !pre.closed) pre.location.replace(url);
-        else window.open(url, "_blank", "noopener,noreferrer");
+        navigateNoReferrer(pre, url); // no Referer → not flagged as bot traffic
       } else {
-        if (pre && !pre.closed) pre.close();
+        closeTab(pre);
         toast({ title: "Couldn't find a booking page", variant: "error" });
       }
     } catch {
-      if (pre && !pre.closed) pre.close();
+      closeTab(pre);
       toast({ title: "Couldn't open the booking page", variant: "error" });
     } finally {
       setBookingTitle(null);

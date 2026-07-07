@@ -26,6 +26,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { useVoiceRecorder } from "@/components/use-voice-recorder";
+import { preopenTab, navigateNoReferrer, closeTab } from "@/lib/open-external";
 
 const SUGGESTIONS = [
   "What do I have today?",
@@ -249,22 +250,6 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     });
   }
 
-  /**
-   * Open a booking/provider page for a "book now" request. Best-effort: browsers
-   * may block a pop-up opened after an async round-trip, so on failure we point
-   * the user at the clickable link that's also rendered in the reply.
-   */
-  function openBookingWindow(url: string) {
-    const win = window.open(url, "_blank", "noopener,noreferrer");
-    if (!win) {
-      toast({
-        title: "Tap to open the booking page",
-        description:
-          "Your browser blocked the pop-up — tap the booking link in my reply.",
-      });
-    }
-  }
-
   function enterVoiceMode() {
     stopAudio();
     setVoiceMode(true);
@@ -326,21 +311,7 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
     // synchronously inside the click gesture — so pop-up blockers don't stop us.
     // We redirect it to the real link once the reply arrives, or close it if the
     // assistant didn't actually produce a booking link.
-    const preOpened = looksLikeBookNow(content)
-      ? window.open("about:blank", "_blank")
-      : null;
-    if (preOpened) {
-      // Friendly interim content while the assistant resolves the real page.
-      try {
-        preOpened.document.write(
-          "<title>Rufuspa — opening booking page…</title>" +
-            "<body style='font-family:system-ui;display:grid;place-items:center;height:100vh;color:#666'>" +
-            "<p>Finding the booking page…</p></body>",
-        );
-      } catch {
-        /* non-fatal */
-      }
-    }
+    const preOpened = looksLikeBookNow(content) ? preopenTab() : null;
     setInput("");
     setPendingUserMessage(content);
     setSending(true);
@@ -357,17 +328,12 @@ function Assistant({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
       reply = res.reply;
       // "Book now" → open the provider page immediately (human still checks out).
       if (res.openUrl) {
-        if (preOpened && !preOpened.closed) {
-          // Plain top-level navigation — indistinguishable from typing the URL.
-          preOpened.location.replace(res.openUrl);
-        } else {
-          openBookingWindow(res.openUrl);
-        }
-      } else if (preOpened && !preOpened.closed) {
-        preOpened.close(); // no booking link came back — don't leave a blank tab
+        navigateNoReferrer(preOpened, res.openUrl); // no Referer → not bot-flagged
+      } else {
+        closeTab(preOpened); // no booking link came back — don't leave a blank tab
       }
     } catch (err) {
-      if (preOpened && !preOpened.closed) preOpened.close();
+      closeTab(preOpened);
       toast({
         title: "Assistant error",
         description: err instanceof Error ? err.message : undefined,
