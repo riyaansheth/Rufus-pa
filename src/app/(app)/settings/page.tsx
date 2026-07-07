@@ -28,6 +28,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
@@ -247,9 +249,19 @@ function SettingsView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
 function EmailNotificationsCard() {
   const prefs = useQuery(api.users.briefingPrefs);
   const setEmail = useMutation(api.users.setEmailNotifications);
+  const setNotificationEmail = useMutation(api.users.setNotificationEmail);
   const { toast } = useToast();
+  const [address, setAddress] = React.useState("");
+  const [savingAddr, setSavingAddr] = React.useState(false);
 
-  async function save(enabled: boolean) {
+  // Seed the input with the current delivery address once loaded.
+  React.useEffect(() => {
+    if (prefs?.deliveryEmail !== undefined && prefs?.deliveryEmail !== null) {
+      setAddress(prefs.deliveryEmail);
+    }
+  }, [prefs?.deliveryEmail]);
+
+  async function toggle(enabled: boolean) {
     try {
       await setEmail({ enabled });
       toast({
@@ -265,6 +277,22 @@ function EmailNotificationsCard() {
     }
   }
 
+  async function saveAddress() {
+    setSavingAddr(true);
+    try {
+      await setNotificationEmail({ email: address.trim() });
+      toast({ title: "Delivery email saved", variant: "success" });
+    } catch (err) {
+      toast({
+        title: "Could not save",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      });
+    } finally {
+      setSavingAddr(false);
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -273,23 +301,49 @@ function EmailNotificationsCard() {
         </CardTitle>
         <CardDescription>
           Get an email for everything — reminders firing, tasks, calendar updates,
-          approvals waiting, monitor alerts, and daily briefings
-          {prefs?.email ? ` (sent to ${prefs.email})` : ""}.
+          approvals waiting, monitor alerts, and daily briefings.
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
         {prefs === undefined ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : (
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              className="size-4 accent-primary"
-              checked={prefs?.emailNotifications ?? true}
-              onChange={(e) => save(e.target.checked)}
-            />
-            Email me every notification
-          </label>
+          <>
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="size-4 accent-primary"
+                checked={prefs?.emailNotifications ?? true}
+                onChange={(e) => toggle(e.target.checked)}
+              />
+              Email me every notification
+            </label>
+            <div className="space-y-1.5">
+              <Label htmlFor="notif-email">Send emails to</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="notif-email"
+                  type="email"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  placeholder={prefs?.accountEmail ?? "you@example.com"}
+                />
+                <Button
+                  variant="outline"
+                  onClick={saveAddress}
+                  disabled={savingAddr || address.trim() === (prefs?.deliveryEmail ?? "")}
+                >
+                  {savingAddr ? <Loader2 className="animate-spin" /> : null}
+                  Save
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Defaults to your account email
+                {prefs?.accountEmail ? ` (${prefs.accountEmail})` : ""}. Change it
+                to send notifications anywhere.
+              </p>
+            </div>
+          </>
         )}
       </CardContent>
     </Card>

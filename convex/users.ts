@@ -178,7 +178,10 @@ export const briefingPrefs = query({
       timezone: user?.timezone ?? null,
       // Email notifications default ON (undefined = enabled).
       emailNotifications: user?.emailNotifications ?? true,
-      email: user?.email ?? null,
+      // The address emails actually go to (override, else account email).
+      deliveryEmail: user?.notificationEmail || user?.email || null,
+      notificationEmail: user?.notificationEmail ?? null,
+      accountEmail: user?.email ?? null,
     };
   },
 });
@@ -197,6 +200,32 @@ export const setEmailNotifications = mutation({
     if (!user) throw new Error("User not found — reload and try again.");
     await ctx.db.patch(user._id, {
       emailNotifications: enabled,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Set (or clear) the address notification emails go to. Empty string clears the
+ * override and falls back to the account email.
+ */
+export const setNotificationEmail = mutation({
+  args: { email: v.string() },
+  handler: async (ctx, { email }) => {
+    const identity = await requireIdentity(ctx);
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUser", (q) =>
+        q.eq("clerkUserId", identity.clerkUserId),
+      )
+      .unique();
+    if (!user) throw new Error("User not found — reload and try again.");
+    const trimmed = email.trim();
+    if (trimmed && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      throw new Error("Please enter a valid email address.");
+    }
+    await ctx.db.patch(user._id, {
+      notificationEmail: trimmed || undefined,
       updatedAt: Date.now(),
     });
   },

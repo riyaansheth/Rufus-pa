@@ -100,9 +100,11 @@ export async function notify(
     });
   }
   // Email every notification unless the user turned it off (default ON).
-  if (user?.email && user.emailNotifications !== false) {
+  // Prefer an explicit delivery address, else the account email.
+  const emailTo = user?.notificationEmail || user?.email;
+  if (emailTo && user?.emailNotifications !== false) {
     await ctx.scheduler.runAfter(0, internal.email.send, {
-      to: user.email,
+      to: emailTo,
       subject: args.title,
       title: args.title,
       message: args.message,

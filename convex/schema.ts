@@ -99,6 +99,9 @@ export default defineSchema({
     // Email notifications for all events (reminders, tasks, calendar, approvals,
     // briefings). Default ON — undefined is treated as enabled.
     emailNotifications: v.optional(v.boolean()),
+    // Optional override for WHERE notification emails go. Falls back to the
+    // account (Clerk) email when unset.
+    notificationEmail: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
