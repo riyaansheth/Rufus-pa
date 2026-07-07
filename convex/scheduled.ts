@@ -10,7 +10,12 @@ import { writeAuditLog, notify } from "./lib/audit";
 import { insertApprovalRequest } from "./approvals";
 import { ManualMonitorProvider } from "./integrations/manualMonitor";
 import type { MonitorConditions } from "./integrations/automationProvider";
-import { currentHourInTz, todayWindowInTz } from "./lib/time";
+import {
+  currentHourInTz,
+  todayWindowInTz,
+  REMINDER_LEAD_MS,
+  formatLocalTime,
+} from "./lib/time";
 
 /**
  * System cron handlers. These run without a user identity, so they operate across
@@ -28,21 +33,32 @@ export const triggerDueReminders = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
-    // Only scan reminders that are still scheduled AND due — bounded per sweep.
+    // Fire reminders up to REMINDER_LEAD_MS BEFORE their time (15-min heads-up),
+    // so a 4:00 PM reminder alerts at ~3:45 PM. Still bounded per sweep.
     const due = await ctx.db
       .query("reminders")
       .withIndex("by_status_remindAt", (q) =>
-        q.eq("status", "scheduled").lte("remindAt", now),
+        q.eq("status", "scheduled").lte("remindAt", now + REMINDER_LEAD_MS),
       )
       .collect();
     let triggered = 0;
     for (const r of due) {
       await ctx.db.patch(r._id, { status: "triggered", updatedAt: now });
+      // Include the actual time so a 3:45 heads-up clearly names the 4:00 event.
+      const owner = await ctx.db
+        .query("users")
+        .withIndex("by_clerkUser", (q) => q.eq("clerkUserId", r.createdBy))
+        .unique();
+      const timeStr = formatLocalTime(r.remindAt, owner?.timezone ?? "UTC");
+      const leadMin = Math.max(0, Math.round((r.remindAt - now) / 60000));
+      const when =
+        leadMin > 0 ? `At ${timeStr} (in ${leadMin} min).` : `At ${timeStr}.`;
+      const message = r.message ? `${r.message}\n${when}` : when;
       await notify(ctx, {
         workspaceId: r.workspaceId,
         userId: r.createdBy,
         title: `Reminder: ${r.title}`,
-        message: r.message,
+        message,
         type: "reminder",
         href: "/reminders",
       });
@@ -57,6 +73,91 @@ export const triggerDueReminders = internalMutation({
       triggered++;
     }
     return { triggered };
+  },
+});
+
+// --- Tasks -----------------------------------------------------------------
+
+const HIGH_PRIORITY_NAG_MS = 30 * 60 * 1000; // re-email every 30 min while open
+const DUE_LOOKBACK_MS = 24 * 60 * 60 * 1000; // bound the due-soon scan window
+
+/**
+ * Task notifications: (1) a one-time "due soon" alert ~15 min before a task's due
+ * time, and (2) a repeating every-30-min nag while a HIGH-priority task is still
+ * open. Both go through notify() → in-app + email + Telegram.
+ */
+export const runTaskNotifications = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    let dueSoon = 0;
+    let nagged = 0;
+
+    const tzFor = async (userId: string) => {
+      const u = await ctx.db
+        .query("users")
+        .withIndex("by_clerkUser", (q) => q.eq("clerkUserId", userId))
+        .unique();
+      return u?.timezone ?? "UTC";
+    };
+
+    // (1) Due soon — fire once, 15 min before due (bounded scan window).
+    const dueWindow = await ctx.db
+      .query("tasks")
+      .withIndex("by_dueAt", (q) =>
+        q.gte("dueAt", now - DUE_LOOKBACK_MS).lte("dueAt", now + REMINDER_LEAD_MS),
+      )
+      .collect();
+    for (const t of dueWindow) {
+      if (t.dueAt === undefined) continue;
+      if (t.status === "done" || t.status === "cancelled") continue;
+      if (t.dueNotifiedAt) continue;
+      await ctx.db.patch(t._id, { dueNotifiedAt: now, updatedAt: now });
+      const recipient = t.assignedTo ?? t.createdBy;
+      const timeStr = formatLocalTime(t.dueAt, await tzFor(recipient));
+      const leadMin = Math.round((t.dueAt - now) / 60000);
+      const when =
+        leadMin > 0
+          ? `Due at ${timeStr} (in ${leadMin} min).`
+          : `Due at ${timeStr}.`;
+      await notify(ctx, {
+        workspaceId: t.workspaceId,
+        userId: recipient,
+        title: `Task due soon: ${t.title}`,
+        message: t.description ? `${t.description}\n${when}` : when,
+        type: "task",
+        href: "/tasks",
+      });
+      dueSoon++;
+    }
+
+    // (2) High-priority nag — every 30 min while the task is open.
+    for (const status of ["todo", "in_progress"] as const) {
+      const highs = await ctx.db
+        .query("tasks")
+        .withIndex("by_priority_status", (q) =>
+          q.eq("priority", "high").eq("status", status),
+        )
+        .collect();
+      for (const t of highs) {
+        if (t.lastNagAt && now - t.lastNagAt < HIGH_PRIORITY_NAG_MS) continue;
+        await ctx.db.patch(t._id, { lastNagAt: now, updatedAt: now });
+        const recipient = t.assignedTo ?? t.createdBy;
+        const dueStr = t.dueAt
+          ? ` (due ${formatLocalTime(t.dueAt, await tzFor(recipient))})`
+          : "";
+        await notify(ctx, {
+          workspaceId: t.workspaceId,
+          userId: recipient,
+          title: `High-priority task: ${t.title}`,
+          message: `Still open and marked high priority${dueStr}. Knock it out or reprioritize.`,
+          type: "task",
+          href: "/tasks",
+        });
+        nagged++;
+      }
+    }
+    return { dueSoon, nagged };
   },
 });
 

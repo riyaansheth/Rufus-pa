@@ -17,6 +17,15 @@ crons.interval(
   {},
 );
 
+// Task alerts: "due soon" (15-min heads-up) + high-priority every-30-min nag.
+// Runs every 5 min; the per-task timestamps gate the actual send cadence.
+crons.interval(
+  "run-task-notifications",
+  { minutes: 5 },
+  internal.scheduled.runTaskNotifications,
+  {},
+);
+
 crons.interval(
   "run-monitor-checks",
   { minutes: 5 },

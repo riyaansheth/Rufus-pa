@@ -153,6 +153,10 @@ export default defineSchema({
     assignedTo: v.optional(v.string()), // clerkUserId
     // Google Calendar event mirroring this task's due date (when Google connected).
     googleEventId: v.optional(v.string()),
+    // Notification bookkeeping: when the 15-min "due soon" alert fired (once), and
+    // the last "high-priority still open" nag (repeats every 30 min while open).
+    dueNotifiedAt: v.optional(v.number()),
+    lastNagAt: v.optional(v.number()),
     createdBy: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -160,7 +164,8 @@ export default defineSchema({
     .index("by_workspace", ["workspaceId"])
     .index("by_workspace_status", ["workspaceId", "status"])
     .index("by_workspace_user", ["workspaceId", "assignedTo"])
-    .index("by_dueAt", ["dueAt"]),
+    .index("by_dueAt", ["dueAt"])
+    .index("by_priority_status", ["priority", "status"]),
 
   reminders: defineTable({
     workspaceId: v.id("workspaces"),

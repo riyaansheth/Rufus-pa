@@ -6,13 +6,22 @@ import {
   MutationCtx,
 } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { requireWorkspaceAccess } from "./lib/auth";
 import { writeAuditLog } from "./lib/audit";
 import { scheduleGoogleSync } from "./lib/googleSync";
+import { REMINDER_LEAD_MS } from "./lib/time";
 import { reminderStatusValidator } from "./schema";
 
 // Reminders appear in Google Calendar as a 15-minute block at the remind time.
 const REMINDER_EVENT_DURATION_MS = 15 * 60 * 1000;
+
+/** Fire the reminder sweep immediately if this time is already within the lead. */
+async function maybeFireNow(ctx: MutationCtx, remindAt: number) {
+  if (remindAt <= Date.now() + REMINDER_LEAD_MS) {
+    await ctx.scheduler.runAfter(0, internal.scheduled.triggerDueReminders, {});
+  }
+}
 
 export async function insertReminder(
   ctx: MutationCtx,
@@ -59,6 +68,8 @@ export async function insertReminder(
     endAt: args.remindAt + REMINDER_EVENT_DURATION_MS,
     writeBack: { table: "reminders", id: reminderId },
   });
+  // If it's already within the 15-min lead, don't wait for the next sweep.
+  await maybeFireNow(ctx, args.remindAt);
   return reminderId;
 }
 
@@ -166,6 +177,7 @@ export const reschedule = mutation({
         ? undefined
         : { table: "reminders", id: reminderId },
     });
+    await maybeFireNow(ctx, remindAt);
   },
 });
 

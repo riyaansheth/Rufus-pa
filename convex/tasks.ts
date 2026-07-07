@@ -179,7 +179,11 @@ export const update = mutation({
     if (args.description !== undefined) patch.description = args.description;
     if (args.status !== undefined) patch.status = args.status;
     if (args.priority !== undefined) patch.priority = args.priority;
-    if (args.dueAt !== undefined) patch.dueAt = args.dueAt ?? undefined;
+    if (args.dueAt !== undefined) {
+      patch.dueAt = args.dueAt ?? undefined;
+      // Re-arm the "due soon" alert for the new time.
+      patch.dueNotifiedAt = undefined;
+    }
     if (args.assignedTo !== undefined)
       patch.assignedTo = args.assignedTo ?? undefined;
     await ctx.db.patch(args.taskId, patch);

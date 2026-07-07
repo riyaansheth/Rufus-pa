@@ -4,6 +4,26 @@
  */
 
 /**
+ * How far AHEAD of a reminder's time we notify — reminders fire this many ms
+ * early (so a 4:00 PM reminder alerts at 3:45 PM). If a reminder is created less
+ * than this away, it fires on the next sweep (≈ instantly).
+ */
+export const REMINDER_LEAD_MS = 15 * 60 * 1000;
+
+/** Format an instant as a short local time (e.g. "4:00 PM") in the given tz. */
+export function formatLocalTime(ms: number, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(ms));
+  } catch {
+    return new Date(ms).toISOString();
+  }
+}
+
+/**
  * Minutes east of UTC for `tz` at a given instant (handles DST correctly by
  * asking Intl what the wall-clock reads there).
  */
