@@ -15,6 +15,7 @@ import type * as auditLogs from "../auditLogs.js";
 import type * as calendar from "../calendar.js";
 import type * as calendarConnections from "../calendarConnections.js";
 import type * as crons from "../crons.js";
+import type * as email from "../email.js";
 import type * as googleCalendar from "../googleCalendar.js";
 import type * as http from "../http.js";
 import type * as integrations_automationProvider from "../integrations/automationProvider.js";
@@ -54,6 +55,7 @@ declare const fullApi: ApiFromModules<{
   calendar: typeof calendar;
   calendarConnections: typeof calendarConnections;
   crons: typeof crons;
+  email: typeof email;
   googleCalendar: typeof googleCalendar;
   http: typeof http;
   "integrations/automationProvider": typeof integrations_automationProvider;

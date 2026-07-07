@@ -15,6 +15,7 @@ import {
   UserPlus,
   Sunrise,
   Send,
+  Mail,
   Loader2,
 } from "lucide-react";
 import { PageHeader, RequireWorkspace } from "@/components/page-shell";
@@ -76,6 +77,8 @@ function SettingsView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
             </p>
           </CardContent>
         </Card>
+
+        <EmailNotificationsCard />
 
         <DailyBriefingCard />
 
@@ -238,6 +241,58 @@ function SettingsView({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
         </Card>
       </div>
     </div>
+  );
+}
+
+function EmailNotificationsCard() {
+  const prefs = useQuery(api.users.briefingPrefs);
+  const setEmail = useMutation(api.users.setEmailNotifications);
+  const { toast } = useToast();
+
+  async function save(enabled: boolean) {
+    try {
+      await setEmail({ enabled });
+      toast({
+        title: enabled ? "Email notifications on" : "Email notifications off",
+        variant: "success",
+      });
+    } catch (err) {
+      toast({
+        title: "Could not save",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      });
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Mail className="size-4" /> Email notifications
+        </CardTitle>
+        <CardDescription>
+          Get an email for everything — reminders firing, tasks, calendar updates,
+          approvals waiting, monitor alerts, and daily briefings
+          {prefs?.email ? ` (sent to ${prefs.email})` : ""}.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {prefs === undefined ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={prefs?.emailNotifications ?? true}
+              onChange={(e) => save(e.target.checked)}
+            />
+            Email me every notification
+          </label>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

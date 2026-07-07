@@ -96,6 +96,9 @@ export default defineSchema({
     briefingEnabled: v.optional(v.boolean()),
     briefingHour: v.optional(v.number()), // local hour 0-23, default 8
     lastBriefingSentAt: v.optional(v.number()),
+    // Email notifications for all events (reminders, tasks, calendar, approvals,
+    // briefings). Default ON — undefined is treated as enabled.
+    emailNotifications: v.optional(v.boolean()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

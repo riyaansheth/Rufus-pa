@@ -85,7 +85,7 @@ export async function notify(
     createdAt: Date.now(),
   });
 
-  // Telegram fan-out (best-effort, scheduled so the mutation never blocks on it).
+  // Telegram + email fan-out (best-effort, scheduled so the mutation never blocks).
   const user = await ctx.db
     .query("users")
     .withIndex("by_clerkUser", (q) => q.eq("clerkUserId", args.userId))
@@ -97,6 +97,16 @@ export async function notify(
     await ctx.scheduler.runAfter(0, internal.telegram.send, {
       chatId: user.telegramChatId,
       text,
+    });
+  }
+  // Email every notification unless the user turned it off (default ON).
+  if (user?.email && user.emailNotifications !== false) {
+    await ctx.scheduler.runAfter(0, internal.email.send, {
+      to: user.email,
+      subject: args.title,
+      title: args.title,
+      message: args.message,
+      href: args.href,
     });
   }
 }

@@ -176,7 +176,29 @@ export const briefingPrefs = query({
       briefingEnabled: user?.briefingEnabled ?? false,
       briefingHour: user?.briefingHour ?? 8,
       timezone: user?.timezone ?? null,
+      // Email notifications default ON (undefined = enabled).
+      emailNotifications: user?.emailNotifications ?? true,
+      email: user?.email ?? null,
     };
+  },
+});
+
+/** Enable/disable email notifications for all events. */
+export const setEmailNotifications = mutation({
+  args: { enabled: v.boolean() },
+  handler: async (ctx, { enabled }) => {
+    const identity = await requireIdentity(ctx);
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUser", (q) =>
+        q.eq("clerkUserId", identity.clerkUserId),
+      )
+      .unique();
+    if (!user) throw new Error("User not found — reload and try again.");
+    await ctx.db.patch(user._id, {
+      emailNotifications: enabled,
+      updatedAt: Date.now(),
+    });
   },
 });
 
