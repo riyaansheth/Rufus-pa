@@ -35,6 +35,7 @@ export const priorityValidator = v.union(
 export const reminderStatusValidator = v.union(
   v.literal("scheduled"),
   v.literal("triggered"),
+  v.literal("done"),
   v.literal("cancelled"),
 );
 

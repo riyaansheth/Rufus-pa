@@ -181,6 +181,42 @@ export const reschedule = mutation({
   },
 });
 
+/**
+ * Mark a reminder done. Stops it from firing (so no more emails/alerts) and
+ * removes the mirrored Google Calendar slot. Used by the UI + assistant.
+ */
+export const complete = mutation({
+  args: { workspaceId: v.id("workspaces"), reminderId: v.id("reminders") },
+  handler: async (ctx, { workspaceId, reminderId }) => {
+    const { identity } = await requireWorkspaceAccess(ctx, workspaceId);
+    const reminder = await ctx.db.get(reminderId);
+    if (!reminder || reminder.workspaceId !== workspaceId) {
+      throw new Error("Reminder not found in this workspace.");
+    }
+    await ctx.db.patch(reminderId, {
+      status: "done",
+      googleEventId: undefined,
+      updatedAt: Date.now(),
+    });
+    if (reminder.googleEventId) {
+      await scheduleGoogleSync(ctx, {
+        workspaceId,
+        userId: identity.clerkUserId,
+        op: "delete",
+        googleEventId: reminder.googleEventId,
+      });
+    }
+    await writeAuditLog(ctx, {
+      workspaceId,
+      actorUserId: identity.clerkUserId,
+      action: "reminder.updated",
+      entityType: "reminder",
+      entityId: reminderId,
+      metadata: { status: "done" },
+    });
+  },
+});
+
 export const cancel = mutation({
   args: { workspaceId: v.id("workspaces"), reminderId: v.id("reminders") },
   handler: async (ctx, { workspaceId, reminderId }) => {

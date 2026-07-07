@@ -31,7 +31,7 @@ const SYSTEM_PROMPT = `You are Rufuspa, a careful, professional AI executive ass
 
 You can: schedule calendar events, create reminders, create and track tasks, set up availability monitors (for products, movie tickets, events, or URLs), prepare purchase/booking approval requests, and answer questions about the user's day.
 
-You can also MANAGE existing items by name via the manage* tools: complete/reopen/cancel/delete/update tasks, cancel/reschedule reminders, edit calendar events (change their title, time, location, or description — use manageCalendarEvent with action "update" and only the fields that change; or reschedule/rename/delete), and pause/resume/delete monitors. Users refer to items loosely ("mark the vendor call as done") — pass their words as titleQuery. If the tool returns candidates, ask the user which one they meant; never guess between multiple matches. You cannot approve or reject approval requests — a human must decide those on the Approvals page; offer to point them there.
+You can also MANAGE existing items by name via the manage* tools: complete/reopen/cancel/delete/update tasks, mark reminders done (action "complete" — stops further alerts/emails) or cancel/reschedule them, edit calendar events (change their title, time, location, or description — use manageCalendarEvent with action "update" and only the fields that change; or reschedule/rename/delete), and pause/resume/delete monitors. Users refer to items loosely ("mark the vendor call as done") — pass their words as titleQuery. If the tool returns candidates, ask the user which one they meant; never guess between multiple matches. You cannot approve or reject approval requests — a human must decide those on the Approvals page; offer to point them there.
 
 MEMORY: You remember the user across conversations. Their profile (name, location, role) and remembered facts are provided to you each turn — use them and NEVER ask again for something you already know (e.g. don't ask where they live if their location is given). When the user shares a durable personal fact (where they live, a preference, their role, family, recurring context), call rememberFact to store it. If they tell you a profile detail changed ("I moved to Delhi", "I'm a PM now"), call updateProfile to correct it. Don't remember trivial one-off task details — only lasting facts.
 
@@ -347,12 +347,15 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "manageReminder",
       description:
-        "Cancel or reschedule an existing reminder found by (partial) title.",
+        "Mark done, cancel, or reschedule an existing reminder found by (partial) title. Use action 'complete' when the user says a reminder is done/handled — it stops any further alerts/emails.",
       parameters: {
         type: "object",
         properties: {
           titleQuery: { type: "string" },
-          action: { type: "string", enum: ["cancel", "reschedule"] },
+          action: {
+            type: "string",
+            enum: ["complete", "cancel", "reschedule"],
+          },
           remindAt: {
             type: "string",
             description: "ISO 8601 new time (required for reschedule)",
@@ -485,7 +488,7 @@ const schemas = {
   }),
   manageReminder: z.object({
     titleQuery: z.string().min(1),
-    action: z.enum(["cancel", "reschedule"]),
+    action: z.enum(["complete", "cancel", "reschedule"]),
     remindAt: z.string().optional(),
   }),
   manageCalendarEvent: z.object({
@@ -1324,17 +1327,26 @@ async function dispatchTool(
       case "manageReminder": {
         const a = schemas.manageReminder.parse(parsed);
         const rows = await ctx.runQuery(api.reminders.list, { workspaceId });
-        const res = resolveByTitle(
-          rows.filter((r) => r.status === "scheduled"),
-          a.titleQuery,
+        // "complete" can also apply to a reminder that already fired; cancel/
+        // reschedule only make sense while it's still scheduled.
+        const active = rows.filter((r) =>
+          a.action === "complete"
+            ? r.status === "scheduled" || r.status === "triggered"
+            : r.status === "scheduled",
         );
+        const res = resolveByTitle(active, a.titleQuery);
         if (!("match" in res)) {
           return {
             output: ambiguousOutput("reminder", a.titleQuery, res.candidates),
           };
         }
         const reminder = res.match;
-        if (a.action === "cancel") {
+        if (a.action === "complete") {
+          await ctx.runMutation(api.reminders.complete, {
+            workspaceId,
+            reminderId: reminder._id,
+          });
+        } else if (a.action === "cancel") {
           await ctx.runMutation(api.reminders.cancel, {
             workspaceId,
             reminderId: reminder._id,
@@ -1350,11 +1362,17 @@ async function dispatchTool(
             remindAt,
           });
         }
+        const verb =
+          a.action === "complete"
+            ? "marked done"
+            : a.action === "cancel"
+              ? "cancelled"
+              : "rescheduled";
         return {
           output: { ok: true, reminder: reminder.title, action: a.action },
           action: {
             kind: "reminder_updated",
-            label: `Reminder ${a.action === "cancel" ? "cancelled" : "rescheduled"}: ${reminder.title}`,
+            label: `Reminder ${verb}: ${reminder.title}`,
             entityType: "reminder",
             entityId: reminder._id,
             href: "/reminders",

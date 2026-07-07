@@ -4,7 +4,7 @@ import * as React from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
-import { BellRing, Plus, Loader2, X } from "lucide-react";
+import { BellRing, Plus, Loader2, X, Check } from "lucide-react";
 import { PageHeader, EmptyState, RequireWorkspace } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import { formatDateTime } from "@/lib/utils";
 const statusVariant: Record<string, "info" | "success" | "secondary"> = {
   scheduled: "info",
   triggered: "success",
+  done: "success",
   cancelled: "secondary",
 };
 
@@ -33,11 +34,20 @@ function Reminders({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
   const [open, setOpen] = React.useState(false);
   const reminders = useQuery(api.reminders.list, { workspaceId });
   const cancelFn = useMutation(api.reminders.cancel);
+  const completeFn = useMutation(api.reminders.complete);
   const { toast } = useToast();
   const cancel = (args: Parameters<typeof cancelFn>[0]) =>
     cancelFn(args).catch((err) =>
       toast({
         title: "Could not cancel reminder",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "error",
+      }),
+    );
+  const complete = (args: Parameters<typeof completeFn>[0]) =>
+    completeFn(args).catch((err) =>
+      toast({
+        title: "Could not update reminder",
         description: err instanceof Error ? err.message : undefined,
         variant: "error",
       }),
@@ -88,6 +98,16 @@ function Reminders({ workspaceId }: { workspaceId: Id<"workspaces"> }) {
                 <Badge variant={statusVariant[r.status] ?? "secondary"}>
                   {r.status}
                 </Badge>
+                {r.status === "scheduled" || r.status === "triggered" ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => complete({ workspaceId, reminderId: r._id })}
+                    aria-label="Mark reminder done"
+                  >
+                    <Check /> Done
+                  </Button>
+                ) : null}
                 {r.status === "scheduled" ? (
                   <Button
                     variant="ghost"
