@@ -537,7 +537,7 @@ function ambiguousOutput(kind: string, query: string, candidates: { title: strin
  * search provider — it reuses the same OPENAI_API_KEY. Returns a synthesized
  * answer plus the source URLs the model cited.
  */
-async function runWebSearch(
+export async function runWebSearch(
   query: string,
 ): Promise<{ answer: string; sources: { title?: string; url: string }[]; error?: string }> {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -651,7 +651,7 @@ function isBookNowIntent(text: string): boolean {
  * event id we can't scrape) and open that; fall back to BookMyShow's city listing
  * (never Google, never a bare homepage). An explicit user URL always wins.
  */
-async function resolveBookingUrl(
+export async function resolveBookingUrl(
   kind: "product" | "movie_ticket" | "event" | "generic_url",
   query: string,
   city?: string,
@@ -685,7 +685,7 @@ async function resolveBookingUrl(
   return buildDeepLink({ kind, title: query, query, city, url: explicitUrl });
 }
 
-type NowPlayingMovie = {
+export type NowPlayingMovie = {
   title: string;
   releaseDate?: string;
   language?: string;
@@ -698,7 +698,7 @@ type NowPlayingMovie = {
  * live data (no scraping). Region defaults to India (TMDB_REGION). Requires
  * TMDB_API_KEY on the Convex deployment.
  */
-async function fetchNowPlaying(): Promise<Record<string, unknown>> {
+export async function fetchNowPlaying(): Promise<Record<string, unknown>> {
   const key = process.env.TMDB_API_KEY;
   if (!key) {
     // No TMDB key configured → use the live web search we already have, so cinema

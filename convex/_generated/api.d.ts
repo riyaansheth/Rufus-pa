@@ -31,6 +31,7 @@ import type * as lib_time from "../lib/time.js";
 import type * as memberships from "../memberships.js";
 import type * as memory from "../memory.js";
 import type * as monitors from "../monitors.js";
+import type * as movies from "../movies.js";
 import type * as notifications from "../notifications.js";
 import type * as reminders from "../reminders.js";
 import type * as scheduled from "../scheduled.js";
@@ -69,6 +70,7 @@ declare const fullApi: ApiFromModules<{
   memberships: typeof memberships;
   memory: typeof memory;
   monitors: typeof monitors;
+  movies: typeof movies;
   notifications: typeof notifications;
   reminders: typeof reminders;
   scheduled: typeof scheduled;
